@@ -1,8 +1,11 @@
 {
-  "pipeline": {
+  "calibration": {
     "um_per_px": 1.2,
-    "slice_height_mm": 0.1,
-    "frame_stride": 1
+    "frame_stride": 1,
+    "decimal_places": 2
   },
-  "display_scale": 0.4
+  "user_settings": {
+    "slice_height_mm": 0.09,
+    "display_scale": 0.5
+  }
 }

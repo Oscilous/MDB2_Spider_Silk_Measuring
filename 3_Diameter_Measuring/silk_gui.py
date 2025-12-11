@@ -1,6 +1,10 @@
 import sys
 import cv2
 import numpy as np
+import os
+from datetime import datetime
+import csv
+import psutil
 
 from PyQt5.QtCore import QTimer, pyqtSignal, pyqtSlot, QObject, QThread
 from PyQt5.QtGui import QImage, QPixmap
@@ -37,6 +41,30 @@ class SilkGUI(QMainWindow):
         self.pipeline_config = pipeline_config
         self.display_scale = display_scale
 
+        # Recording state
+        self.is_recording = False
+        self.measurements_buffer = []  # List of dicts with measurement data
+        # Calculate buffer size dynamically: 75% of available memory / ~320 bytes per record
+        try:
+            available_mb = psutil.virtual_memory().available / (1024 * 1024)
+            bytes_per_record = 320  # Estimated size of one measurement record
+            # Use 75% of available memory as buffer
+            self.max_buffer_size = max(1000, int(available_mb * 1024 * 1024 * 0.75 / bytes_per_record))
+        except Exception:
+            # Fallback to conservative default if psutil fails
+            self.max_buffer_size = 10000
+        self.data_folder = "data"
+        if not os.path.exists(self.data_folder):
+            os.makedirs(self.data_folder, exist_ok=True)
+
+        # Recording timing
+        self.recording_start_time = None
+        self.recording_frame_count = 0
+        self.last_frame_time = None
+
+        # I2C state (placeholder)
+        self.i2c_connected = False
+
         # ------------- ROOT LAYOUT (LEFT: IMAGE, RIGHT: INFO) -------------
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -59,10 +87,73 @@ class SilkGUI(QMainWindow):
         self.info_label.setWordWrap(True)
         right_layout.addWidget(self.info_label)
 
-        # Spacing between info and settings
+        # Spacing
         right_layout.addSpacing(20)
 
-        # Settings section header
+        # Data Recording Section (moved up before stretch)
+        data_header = QLabel("<h2>Data Recording</h2>", self)
+        right_layout.addWidget(data_header)
+
+        self.recording_label = QLabel("Ready", self)
+        right_layout.addWidget(self.recording_label)
+
+        # Recording control buttons layout
+        recording_buttons_layout = QHBoxLayout()
+        
+        self.toggle_recording_button = QPushButton("START RECORDING", self)
+        self.toggle_recording_button.setMinimumHeight(38)
+        self.toggle_recording_button.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+        self.toggle_recording_button.clicked.connect(self.toggle_recording)
+        recording_buttons_layout.addWidget(self.toggle_recording_button)
+
+        self.discard_recording_button = QPushButton("DISCARD", self)
+        self.discard_recording_button.setMinimumHeight(38)
+        self.discard_recording_button.setEnabled(False)
+        self.discard_recording_button.setStyleSheet("background-color: #ff9800; color: white; font-weight: bold;")
+        self.discard_recording_button.clicked.connect(self.discard_recording)
+        recording_buttons_layout.addWidget(self.discard_recording_button)
+
+        right_layout.addLayout(recording_buttons_layout)
+
+        self.save_measurements_button = QPushButton("SAVE CSV", self)
+        self.save_measurements_button.setMinimumHeight(38)
+        self.save_measurements_button.setEnabled(False)
+        self.save_measurements_button.clicked.connect(self.save_measurements_csv)
+        right_layout.addWidget(self.save_measurements_button)
+
+        # Storage space display
+        self.storage_label = QLabel("Storage: Calculating...", self)
+        right_layout.addWidget(self.storage_label)
+        self.update_storage_display()  # Initial update
+
+        # I2C Communication Section
+        right_layout.addSpacing(20)
+        i2c_header = QLabel("<h2>I2C Communication</h2>", self)
+        right_layout.addWidget(i2c_header)
+
+        self.i2c_status_label = QLabel("Disconnected", self)
+        right_layout.addWidget(self.i2c_status_label)
+
+        i2c_buttons_layout = QHBoxLayout()
+
+        self.i2c_connect_button = QPushButton("CONNECT", self)
+        self.i2c_connect_button.setMinimumHeight(38)
+        self.i2c_connect_button.clicked.connect(self.i2c_connect)
+        i2c_buttons_layout.addWidget(self.i2c_connect_button)
+
+        self.i2c_send_button = QPushButton("SEND DATA", self)
+        self.i2c_send_button.setMinimumHeight(38)
+        self.i2c_send_button.setEnabled(False)
+        self.i2c_send_button.clicked.connect(self.i2c_send_data)
+        i2c_buttons_layout.addWidget(self.i2c_send_button)
+
+        right_layout.addLayout(i2c_buttons_layout)
+
+        # Growing stretch to push Settings to bottom
+        right_layout.addStretch(1)
+
+        # ======= Settings Section (ALWAYS AT BOTTOM) =======
+        right_layout.addSpacing(20)
         settings_header = QLabel("<h2>Settings</h2>", self)
         right_layout.addWidget(settings_header)
 
@@ -105,20 +196,21 @@ class SilkGUI(QMainWindow):
             tick_labels_layout.addWidget(tick_label)
         right_layout.addLayout(tick_labels_layout)
 
-        # Save button
+        # Save Settings and Exit buttons side by side
+        settings_buttons_layout = QHBoxLayout()
+        
         self.save_button = QPushButton("Save Settings", self)
-        self.save_button.setMinimumHeight(60)
+        self.save_button.setMinimumHeight(45)
         self.save_button.clicked.connect(self.save_settings)
-        right_layout.addWidget(self.save_button)
+        settings_buttons_layout.addWidget(self.save_button)
 
-        # Stop button
-        self.stop_button = QPushButton("Stop", self)
-        self.stop_button.setMinimumHeight(60)
-        self.stop_button.clicked.connect(self.stop_gui)
-        right_layout.addWidget(self.stop_button)
+        self.exit_button = QPushButton("Exit", self)
+        self.exit_button.setMinimumHeight(45)
+        self.exit_button.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+        self.exit_button.clicked.connect(self.stop_gui)
+        settings_buttons_layout.addWidget(self.exit_button)
 
-        # Placeholder stretch so you can drop more buttons later
-        right_layout.addStretch(1)
+        right_layout.addLayout(settings_buttons_layout)
 
         root_layout.addLayout(right_layout, stretch=1)
 
@@ -272,19 +364,84 @@ class SilkGUI(QMainWindow):
                 speed_mm_s = 0.0
                 fps = 0.0
 
+            # Get extra data for display
+            centroid_x = results.get("centroid_x", np.nan)
+            centroid_y = results.get("centroid_y", np.nan)
+            
+            # Format centroid display
+            if np.isfinite(centroid_x) and np.isfinite(centroid_y):
+                centroid_str = f"X:{centroid_x:.0f} Y:{centroid_y:.0f}"
+            else:
+                centroid_str = "No silk"
+
             info_text = (
-                f"<h2>Measurement</h2>"
-                f"Diameter: {mean_um:.2f} µm (±{std_um:.2f})<br>"
-                f"Purity: {pure_pct:.1f}% | Uncertainty: {unc_pct:.1f}%<br>"
+                f"<h2>Measurement & Speed</h2>"
+                f"<table width='100%'>"
+                f"<tr>"
+                f"<td><b>Diameter:</b> {mean_um:.2f} µm (±{std_um:.2f})</td>"
+                f"<td align='right'><b>FPS:</b> {fps:.1f}</td>"
+                f"</tr>"
+                f"<tr>"
+                f"<td><b>Purity:</b> {pure_pct:.1f}% | Unc: {unc_pct:.1f}%</td>"
+                f"<td align='right'><b>Measuring:</b> {speed_mm_s:.2f} mm/s</td>"
+                f"</tr>"
+                f"<tr>"
+                f"<td><b>Position:</b> {centroid_str}</td>"
+                f"<td></td>"
+                f"</tr>"
+                f"</table>"
                 f"<br>"
-                f"<h2>Speed</h2>"
-                f"FPS: {fps:.1f}<br>"
-                f"Measuring: {speed_mm_s:.2f} mm/s<br>"
-                f"<br>"
-                f"<h2>Benchmark</h2>"
-                f"Total: {total_ms:.1f}ms | Otsu2: {otsu2_ms:.1f}ms | Enforce: {enforce_ms:.1f}ms<br>"
-                f"Skeleton: {skel_ms:.1f}ms | Otsu-band: {otsu_band_ms:.1f}ms"
+                f"<h2>Benchmark (ms)</h2>"
+                f"Total: {total_ms:.1f} | Splitting BG: {otsu2_ms:.1f} | Filling Gaps: {enforce_ms:.1f}<br>"
+                f"Centerline: {skel_ms:.1f} | Finding Uncertainties: {otsu_band_ms:.1f}"
             )
+
+            # Update recording buffer if recording is active
+            if self.is_recording:
+                current_time = datetime.now()
+                time_since_start_ms = (current_time - self.recording_start_time).total_seconds() * 1000.0
+                
+                # Calculate frame duration
+                if self.last_frame_time is not None:
+                    frame_duration_ms = (current_time - self.last_frame_time).total_seconds() * 1000.0
+                else:
+                    frame_duration_ms = 0.0
+                
+                self.last_frame_time = current_time
+                self.recording_frame_count += 1
+                
+                # Determine measurement quality
+                n_pts = dia_stats.get("n_points", 0)
+                valid = results.get("valid_band", False)
+                if not valid or n_pts < 5:
+                    quality = "low_confidence"
+                elif n_pts < 20:
+                    quality = "degraded"
+                else:
+                    quality = "good"
+                
+                centroid_x = results.get("centroid_x", np.nan)
+                centroid_y = results.get("centroid_y", np.nan)
+                
+                meas_record = {
+                    "timestamp": current_time.isoformat(),
+                    "frame_number": self.recording_frame_count,
+                    "time_since_start_ms": time_since_start_ms,
+                    "frame_duration_ms": frame_duration_ms,
+                    "diameter_um": mean_um,
+                    "diameter_std_um": std_um,
+                    "purity_pct": pure_pct,
+                    "speed_mm_s": speed_mm_s,
+                    "crop_height_mm": self.pipeline_config.slice_height_mm,
+                    "n_points": n_pts,
+                    "centroid_x": centroid_x,
+                    "centroid_y": centroid_y,
+                    "measurement_quality": quality,
+                }
+                self.measurements_buffer.append(meas_record)
+                count = len(self.measurements_buffer)
+                percent_filled = int(100 * count / self.max_buffer_size)
+                self.recording_label.setText(f"Recording: {count}/{self.max_buffer_size} ({percent_filled}%)")
 
             self.info_label.setText(info_text)
 
@@ -301,6 +458,146 @@ class SilkGUI(QMainWindow):
         except Exception:
             pass
         self._waiting_for_result = False
+
+    # -------------------------------------------------
+    # Data Recording
+    # -------------------------------------------------
+    def update_storage_display(self):
+        """Update available storage space display."""
+        try:
+            import shutil
+            stat = shutil.disk_usage(self.data_folder)
+            available_mb = stat.free / (1024 * 1024)
+            available_gb = available_mb / 1024
+            if available_gb > 1:
+                self.storage_label.setText(f"Storage: {available_gb:.1f} GB available")
+            else:
+                self.storage_label.setText(f"Storage: {available_mb:.0f} MB available")
+        except Exception:
+            self.storage_label.setText("Storage: Unknown")
+
+    def toggle_recording(self):
+        """Toggle recording on/off."""
+        if not self.is_recording:
+            # Start recording
+            self.is_recording = True
+            self.measurements_buffer = []
+            self.recording_start_time = datetime.now()
+            self.last_frame_time = None
+            self.recording_frame_count = 0
+            self.recording_label.setText("Recording: 0 measurements")
+            self.toggle_recording_button.setText("STOP RECORDING")
+            self.toggle_recording_button.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+            self.discard_recording_button.setEnabled(True)
+            self.save_measurements_button.setEnabled(False)
+        else:
+            # Stop recording
+            self.is_recording = False
+            count = len(self.measurements_buffer)
+            self.recording_label.setText(f"Stopped: {count} measurements (ready to save)")
+            self.toggle_recording_button.setText("START RECORDING")
+            self.toggle_recording_button.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+            self.discard_recording_button.setEnabled(True)
+            self.save_measurements_button.setEnabled(count > 0)
+
+    def discard_recording(self):
+        """Discard current recording buffer."""
+        self.measurements_buffer = []
+        self.is_recording = False
+        self.recording_label.setText("Discarded - Ready")
+        self.toggle_recording_button.setText("START RECORDING")
+        self.toggle_recording_button.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+        self.discard_recording_button.setEnabled(False)
+        self.save_measurements_button.setEnabled(False)
+
+    def save_measurements_csv(self):
+        """Save buffered measurements to CSV file with decimal formatting."""
+        if not self.measurements_buffer:
+            self.recording_label.setText("No measurements to save")
+            return
+
+        try:
+            # Generate filename with timestamp
+            timestamp_str = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            csv_filename = os.path.join(self.data_folder, f"measurements_{timestamp_str}.csv")
+
+            # Write CSV with all tracked fields
+            fieldnames = [
+                "timestamp",
+                "frame_number",
+                "time_since_start_ms",
+                "frame_duration_ms",
+                "diameter_um",
+                "diameter_std_um",
+                "purity_pct",
+                "speed_mm_s",
+                "crop_height_mm",
+                "n_points",
+                "centroid_x",
+                "centroid_y",
+                "measurement_quality",
+            ]
+
+            # Numeric fields that should be formatted with decimal_places
+            numeric_fields = {
+                "diameter_um", "diameter_std_um", "purity_pct", "speed_mm_s",
+                "crop_height_mm", "centroid_x", "centroid_y"
+            }
+            decimal_format = f"{{:.{self.pipeline_config.decimal_places}f}}"
+
+            with open(csv_filename, "w", newline="") as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                # Format numeric values with proper decimal places
+                for row in self.measurements_buffer:
+                    formatted_row = row.copy()
+                    for field in numeric_fields:
+                        if field in formatted_row and formatted_row[field] is not None:
+                            try:
+                                formatted_row[field] = decimal_format.format(float(formatted_row[field]))
+                            except (ValueError, TypeError):
+                                pass  # Keep original if formatting fails
+                    writer.writerow(formatted_row)
+
+            count = len(self.measurements_buffer)
+            self.recording_label.setText(f"✓ Saved {count} measurements to {os.path.basename(csv_filename)}")
+            self.measurements_buffer = []
+            self.save_measurements_button.setEnabled(False)
+
+        except Exception as e:
+            self.recording_label.setText(f"✗ Save error: {e}")
+
+    # -------------------------------------------------
+    # I2C Communication (placeholder)
+    # -------------------------------------------------
+    def i2c_connect(self):
+        """Connect to I2C device."""
+        if not self.i2c_connected:
+            # TODO: Implement actual I2C connection
+            self.i2c_connected = True
+            self.i2c_status_label.setText("✓ Connected (address: 0x50)")
+            self.i2c_connect_button.setText("DISCONNECT")
+            self.i2c_send_button.setEnabled(True)
+        else:
+            # TODO: Implement actual I2C disconnection
+            self.i2c_connected = False
+            self.i2c_status_label.setText("Disconnected")
+            self.i2c_connect_button.setText("CONNECT")
+            self.i2c_send_button.setEnabled(False)
+
+    def i2c_send_data(self):
+        """Send current measurement via I2C."""
+        if not self.i2c_connected:
+            self.i2c_status_label.setText("Not connected")
+            return
+
+        try:
+            # TODO: Implement actual I2C data send
+            # For now, just update status
+            self.i2c_status_label.setText("✓ Data sent successfully")
+        except Exception as e:
+            self.i2c_status_label.setText(f"✗ Send failed: {e}")
 
     # -------------------------------------------------
     # Stop function

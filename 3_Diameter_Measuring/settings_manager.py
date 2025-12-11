@@ -16,10 +16,18 @@ SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
 def save_settings(config: PipelineConfig, display_scale: float) -> None:
     """
     Save pipeline config and display settings to JSON file.
+    Separates hardcoded calibration values from user-editable settings.
     """
     settings = {
-        "pipeline": asdict(config),
-        "display_scale": display_scale,
+        "calibration": {
+            "um_per_px": config.um_per_px,  # Camera calibration
+            "frame_stride": config.frame_stride,  # Frame processing stride
+            "decimal_places": config.decimal_places,  # Decimal precision for CSV export
+        },
+        "user_settings": {
+            "slice_height_mm": config.slice_height_mm,  # Editable: crop height
+            "display_scale": display_scale,  # Editable: display scaling
+        },
     }
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=2)
@@ -48,20 +56,33 @@ def get_default_config_and_scale() -> tuple:
     """
     Load settings from JSON if available, otherwise return defaults.
     Returns (PipelineConfig, display_scale).
+    
+    Settings are organized as:
+    - calibration: hardcoded values (um_per_px, frame_stride, decimal_places)
+    - user_settings: editable from UI (slice_height_mm, display_scale)
     """
     settings = load_settings()
     
     if settings is None:
         return PipelineConfig(), 0.4
     
-    # Reconstruct PipelineConfig from saved dict
-    pipeline_dict = settings.get("pipeline", {})
-    config = PipelineConfig(
-        um_per_px=pipeline_dict.get("um_per_px", 1.2),
-        slice_height_mm=pipeline_dict.get("slice_height_mm", 0.25),
-        frame_stride=pipeline_dict.get("frame_stride", 1),
-    )
+    # Get calibration (hardcoded) values
+    calibration = settings.get("calibration", {})
+    um_per_px = calibration.get("um_per_px", 1.2)
+    frame_stride = calibration.get("frame_stride", 1)
+    decimal_places = calibration.get("decimal_places", 2)
     
-    display_scale = settings.get("display_scale", 0.4)
+    # Get user-editable values
+    user_settings = settings.get("user_settings", {})
+    slice_height_mm = user_settings.get("slice_height_mm", 0.25)
+    display_scale = user_settings.get("display_scale", 0.4)
+    
+    # Reconstruct PipelineConfig
+    config = PipelineConfig(
+        um_per_px=um_per_px,
+        slice_height_mm=slice_height_mm,
+        frame_stride=frame_stride,
+        decimal_places=decimal_places,
+    )
     
     return config, display_scale

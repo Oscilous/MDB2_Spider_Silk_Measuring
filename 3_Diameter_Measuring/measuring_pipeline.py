@@ -38,6 +38,9 @@ class PipelineConfig:
     um_per_px: float = 1.2         # micrometres per pixel (adjust to your calibration)
     slice_height_mm: float = 0.25  # height of the analyzed slice in mm
 
+    # Output formatting
+    decimal_places: int = 2        # decimal places for saved data (0-6)
+
     # Optional: limit processing to every N-th frame (can be used later)
     frame_stride: int = 1
 
@@ -299,11 +302,21 @@ def diameters_from_skeleton(
     diam_px = 2.0 * radii_px
     diam_um = diam_px * um_per_px
 
+    # Use robust statistics: IQR-based stddev instead of sample std
+    # This reduces sensitivity to outliers and noise when slice is thin
+    if diam_um.size > 0:
+        q75, q25 = np.percentile(diam_um, [75, 25])
+        iqr = q75 - q25
+        # IQR-based standard deviation (roughly equivalent to std for normal dist)
+        robust_std = iqr / 1.35
+    else:
+        robust_std = np.nan
+
     stats = {
-        "mean_um": float(diam_um.mean()),
-        "std_um": float(diam_um.std()),
-        "min_um": float(diam_um.min()),
-        "max_um": float(diam_um.max()),
+        "mean_um": float(np.median(diam_um)) if diam_um.size > 0 else np.nan,  # Use median (more robust)
+        "std_um": float(robust_std),
+        "min_um": float(diam_um.min()) if diam_um.size > 0 else np.nan,
+        "max_um": float(diam_um.max()) if diam_um.size > 0 else np.nan,
         "n_points": int(diam_um.size),
     }
     return diam_px, diam_um, stats
@@ -670,6 +683,14 @@ def process_frame(
         "stacking_ms": (t7 - t6) * 1000.0,
     }
 
+    # Calculate silk centroid (position in crop)
+    centroid_x = np.nan
+    centroid_y = np.nan
+    if band_mask.any():
+        y_coords, x_coords = np.where(band_mask)
+        centroid_x = float(np.mean(x_coords))
+        centroid_y = float(np.mean(y_coords))
+
     results = {
         "diameter_stats": dia_stats,
         "band_composition": band_analysis,
@@ -678,6 +699,8 @@ def process_frame(
         "slice_height_px": slice_height_px,
         "valid_band": bool(valid_band),
         "timing": timing,
+        "centroid_x": centroid_x,
+        "centroid_y": centroid_y,
     }
 
     # process_frame: end (debugging removed)
