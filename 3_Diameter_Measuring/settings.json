@@ -1,0 +1,8 @@
+{
+  "pipeline": {
+    "um_per_px": 1.2,
+    "slice_height_mm": 0.1,
+    "frame_stride": 1
+  },
+  "display_scale": 0.4
+}
