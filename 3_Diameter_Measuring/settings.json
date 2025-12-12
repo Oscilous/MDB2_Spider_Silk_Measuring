@@ -5,7 +5,7 @@
     "decimal_places": 2
   },
   "user_settings": {
-    "slice_height_mm": 0.09,
+    "slice_height_mm": 0.1,
     "display_scale": 0.5
   }
 }

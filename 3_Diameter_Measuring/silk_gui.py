@@ -54,9 +54,9 @@ class SilkGUI(QMainWindow):
         except Exception:
             # Fallback to conservative default if psutil fails
             self.max_buffer_size = 10000
-        self.data_folder = "data"
-        if not os.path.exists(self.data_folder):
-            os.makedirs(self.data_folder, exist_ok=True)
+        # Store data under the 3_Diameter_Measuring folder next to this file
+        self.data_folder = os.path.join(os.path.dirname(__file__), "data")
+        os.makedirs(self.data_folder, exist_ok=True)
 
         # Recording timing
         self.recording_start_time = None
