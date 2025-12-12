@@ -44,6 +44,7 @@ class SilkGUI(QMainWindow):
         # Recording state
         self.is_recording = False
         self.measurements_buffer = []  # List of dicts with measurement data
+        self.images_folder = None  # Folder for current recording session images
         # Calculate buffer size dynamically: 75% of available memory / ~320 bytes per record
         try:
             available_mb = psutil.virtual_memory().available / (1024 * 1024)
@@ -442,6 +443,23 @@ class SilkGUI(QMainWindow):
                 count = len(self.measurements_buffer)
                 percent_filled = int(100 * count / self.max_buffer_size)
                 self.recording_label.setText(f"Recording: {count}/{self.max_buffer_size} ({percent_filled}%)")
+                
+                # Save images for this frame
+                if self.images_folder is not None:
+                    try:
+                        frame_num = self.recording_frame_count
+                        original_img = results.get("original_crop")
+                        uncertainty_img = results.get("uncertainty_overlay")
+                        
+                        if original_img is not None:
+                            original_path = os.path.join(self.images_folder, f"frame_{frame_num:06d}_original.png")
+                            cv2.imwrite(original_path, original_img)
+                        
+                        if uncertainty_img is not None:
+                            uncertainty_path = os.path.join(self.images_folder, f"frame_{frame_num:06d}_uncertainty.png")
+                            cv2.imwrite(uncertainty_path, uncertainty_img)
+                    except Exception as e:
+                        print(f"Error saving images for frame {frame_num}: {e}")
 
             self.info_label.setText(info_text)
 
@@ -485,13 +503,19 @@ class SilkGUI(QMainWindow):
             self.recording_start_time = datetime.now()
             self.last_frame_time = None
             self.recording_frame_count = 0
+            
+            # Create timestamped images folder
+            timestamp_str = self.recording_start_time.strftime("%Y-%m-%d_%H%M%S")
+            self.images_folder = os.path.join(self.data_folder, f"images_{timestamp_str}")
+            os.makedirs(self.images_folder, exist_ok=True)
+            
             self.recording_label.setText("Recording: 0 measurements")
             self.toggle_recording_button.setText("STOP RECORDING")
             self.toggle_recording_button.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
             self.discard_recording_button.setEnabled(True)
             self.save_measurements_button.setEnabled(False)
         else:
-            # Stop recording
+            # Stop recording (images folder kept for saving)
             self.is_recording = False
             count = len(self.measurements_buffer)
             self.recording_label.setText(f"Stopped: {count} measurements (ready to save)")
@@ -501,9 +525,19 @@ class SilkGUI(QMainWindow):
             self.save_measurements_button.setEnabled(count > 0)
 
     def discard_recording(self):
-        """Discard current recording buffer."""
+        """Discard current recording buffer and delete images."""
         self.measurements_buffer = []
         self.is_recording = False
+        
+        # Delete images folder if it exists
+        if self.images_folder and os.path.exists(self.images_folder):
+            import shutil
+            try:
+                shutil.rmtree(self.images_folder)
+            except Exception as e:
+                print(f"Error deleting images folder: {e}")
+        self.images_folder = None
+        
         self.recording_label.setText("Discarded - Ready")
         self.toggle_recording_button.setText("START RECORDING")
         self.toggle_recording_button.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
@@ -561,8 +595,10 @@ class SilkGUI(QMainWindow):
                     writer.writerow(formatted_row)
 
             count = len(self.measurements_buffer)
-            self.recording_label.setText(f"✓ Saved {count} measurements to {os.path.basename(csv_filename)}")
+            images_msg = f" & {count} image pairs" if self.images_folder else ""
+            self.recording_label.setText(f"✓ Saved {count} measurements{images_msg} to {os.path.basename(csv_filename)}")
             self.measurements_buffer = []
+            self.images_folder = None
             self.save_measurements_button.setEnabled(False)
 
         except Exception as e:

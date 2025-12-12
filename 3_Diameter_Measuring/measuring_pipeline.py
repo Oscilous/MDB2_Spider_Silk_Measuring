@@ -701,6 +701,8 @@ def process_frame(
         "timing": timing,
         "centroid_x": centroid_x,
         "centroid_y": centroid_y,
+        "original_crop": frame_crop_bgr,  # Save for recording
+        "uncertainty_overlay": overlay_crop,  # Save for recording
     }
 
     # process_frame: end (debugging removed)

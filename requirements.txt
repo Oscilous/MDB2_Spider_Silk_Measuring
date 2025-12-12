@@ -1,0 +1,12 @@
+# Generated from project imports in the workspace
+# Note: On Raspberry Pi, some packages (picamera2, system libs) may need OS packages
+PyQt5
+opencv-python-headless  # headless OpenCV without bundled Qt (prevents Qt plugin conflicts)
+numpy
+psutil
+scikit-image
+scipy
+picamera2
+
+# Optional / common helpers
+pillow

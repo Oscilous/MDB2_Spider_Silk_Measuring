@@ -1,6 +1,13 @@
 import os
 import sys
 
+# Force system Qt plugins to avoid conflicts with OpenCV-bundled Qt
+# Must be set BEFORE importing PyQt5 or cv2
+os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = "/usr/lib/aarch64-linux-gnu/qt5/plugins"
+os.environ["QT_PLUGIN_PATH"] = "/usr/lib/aarch64-linux-gnu/qt5/plugins"
+# Ensure DISPLAY is set for X11
+os.environ.setdefault("DISPLAY", ":0")
+
 from PyQt5.QtWidgets import QApplication
 from picamera2 import Picamera2
 
@@ -10,9 +17,6 @@ from settings_manager import get_default_config_and_scale
 
 
 def main():
-    # Make sure we draw to the Pi display
-    os.environ["DISPLAY"] = ":0"
-
     # ----- Load or use default pipeline configuration -----
     pipeline_config, display_scale = get_default_config_and_scale()
 
