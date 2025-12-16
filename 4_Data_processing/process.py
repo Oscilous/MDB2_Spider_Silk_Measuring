@@ -66,7 +66,7 @@ class StrandSpeedDialog:
         wheel_frame = ttk.Frame(main_frame)
         wheel_frame.pack(fill=tk.X, pady=5)
         ttk.Label(wheel_frame, text="Wheel diameter (mm):", width=20).pack(side=tk.LEFT)
-        self.diameter_var = tk.StringVar(value="90")
+        self.diameter_var = tk.StringVar(value="50")
         ttk.Entry(wheel_frame, textvariable=self.diameter_var, width=15).pack(side=tk.LEFT)
         
         # um per pixel (camera calibration)

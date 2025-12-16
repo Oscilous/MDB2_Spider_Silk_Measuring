@@ -3,11 +3,11 @@ Dataset: 2025-12-12_151402
 ============================================================
 
 Processing Settings:
-  Strand speed: 11.78 mm/s
+  Strand speed: 6.54 mm/s
   Camera calibration: 1.2 µm/px
   Motor RPM: 20.0
   Gear ratio: 1:8.0
-  Wheel diameter: 90.0 mm
+  Wheel diameter: 50.0 mm
 
 Results Summary:
   Total sections: 5
