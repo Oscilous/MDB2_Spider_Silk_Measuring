@@ -45,6 +45,7 @@ class SilkGUI(QMainWindow):
         self.is_recording = False
         self.measurements_buffer = []  # List of dicts with measurement data
         self.images_folder = None  # Folder for current recording session images
+        self.recording_timestamp_str = None  # Shared timestamp for images folder and CSV
         # Calculate buffer size dynamically: 75% of available memory / ~320 bytes per record
         try:
             available_mb = psutil.virtual_memory().available / (1024 * 1024)
@@ -504,9 +505,9 @@ class SilkGUI(QMainWindow):
             self.last_frame_time = None
             self.recording_frame_count = 0
             
-            # Create timestamped images folder
-            timestamp_str = self.recording_start_time.strftime("%Y-%m-%d_%H%M%S")
-            self.images_folder = os.path.join(self.data_folder, f"images_{timestamp_str}")
+            # Create timestamped images folder - use same timestamp for CSV later
+            self.recording_timestamp_str = self.recording_start_time.strftime("%Y-%m-%d_%H%M%S")
+            self.images_folder = os.path.join(self.data_folder, f"images_{self.recording_timestamp_str}")
             os.makedirs(self.images_folder, exist_ok=True)
             
             self.recording_label.setText("Recording: 0 measurements")
@@ -537,6 +538,7 @@ class SilkGUI(QMainWindow):
             except Exception as e:
                 print(f"Error deleting images folder: {e}")
         self.images_folder = None
+        self.recording_timestamp_str = None
         
         self.recording_label.setText("Discarded - Ready")
         self.toggle_recording_button.setText("START RECORDING")
@@ -551,8 +553,8 @@ class SilkGUI(QMainWindow):
             return
 
         try:
-            # Generate filename with timestamp
-            timestamp_str = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            # Use the same timestamp as the images folder
+            timestamp_str = self.recording_timestamp_str or datetime.now().strftime("%Y-%m-%d_%H%M%S")
             csv_filename = os.path.join(self.data_folder, f"measurements_{timestamp_str}.csv")
 
             # Write CSV with all tracked fields
@@ -599,6 +601,7 @@ class SilkGUI(QMainWindow):
             self.recording_label.setText(f"✓ Saved {count} measurements{images_msg} to {os.path.basename(csv_filename)}")
             self.measurements_buffer = []
             self.images_folder = None
+            self.recording_timestamp_str = None  # Clear timestamp for next recording
             self.save_measurements_button.setEnabled(False)
 
         except Exception as e:
