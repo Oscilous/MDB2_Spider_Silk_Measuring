@@ -179,12 +179,13 @@ def process_selected_data(config_file="selection_config.json",
         output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    # Load selections from per-dataset outputs folder
-    print("\nLoading selection configuration from outputs/ ...")
+    # Load selections from per-dataset inputs folder
+    print("\nLoading selection configuration from inputs/ ...")
     selections = {}
-    outputs_dir = Path(__file__).resolve().parent / "outputs"
-    if outputs_dir.exists():
-        for sel_file in outputs_dir.glob("*/selection_config.json"):
+    inputs_dir = Path(__file__).resolve().parent / "inputs"
+    strand_metadata = {}  # Track strand_end_frame per dataset
+    if inputs_dir.exists():
+        for sel_file in inputs_dir.glob("*/selection_config.json"):
             try:
                 dataset_name = sel_file.parent.name
                 with open(sel_file, 'r') as f:
@@ -192,20 +193,25 @@ def process_selected_data(config_file="selection_config.json",
                 if isinstance(data, list):
                     selections[dataset_name] = data
                 elif isinstance(data, dict):
-                    # if dict, try to normalize
+                    # New format: has 'sections' key
                     if 'sections' in data and isinstance(data['sections'], list):
                         selections[dataset_name] = data['sections']
+                        # Store strand_end_frame if present
+                        if 'strand_end_frame' in data:
+                            strand_metadata[dataset_name] = {'strand_end_frame': data['strand_end_frame']}
                     else:
                         # fallback: store empty or attempt to use dataset key
                         selections[dataset_name] = data.get(dataset_name, []) if isinstance(data.get(dataset_name, []), list) else []
                 else:
                     selections[dataset_name] = []
                 print(f"  Found selections for {dataset_name}: {len(selections[dataset_name])} sections")
+                if dataset_name in strand_metadata:
+                    print(f"    Strand marked as ended at frame {strand_metadata[dataset_name]['strand_end_frame'] + 1}")
             except Exception as e:
                 print(f"  Failed to read {sel_file}: {e}")
 
     if not selections:
-        print("No selections found in outputs/. Run viewer.py to create selection_config.json per dataset.")
+        print("No selections found in inputs/. Run viewer.py to create selection_config.json per dataset.")
         return
     
     # Process each dataset
@@ -227,6 +233,9 @@ def process_selected_data(config_file="selection_config.json",
         dataset_output.mkdir(parents=True, exist_ok=True)
         sections_dir = dataset_output / "sections"
         sections_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Calculate number of sections for consistent coloring
+        num_sections = len(sections)
         
         # Process each section
         for section_idx, (start, end) in enumerate(sections, 1):
@@ -276,7 +285,7 @@ def process_selected_data(config_file="selection_config.json",
                 image_folder / f"frame_{frame_num:06d}_original.png"
                 for frame_num in range(start + 1, end + 2)
             ]
-            stitched_path = section_folder / "stitched.png"
+            stitched_path = section_folder / f"sec{section_idx}_stitched.png"
             print(f"    Creating stitched image (vertical, speed-based spacing)...")
             
             # Use vertical stitching with speed-based spacing
@@ -295,7 +304,7 @@ def process_selected_data(config_file="selection_config.json",
                 image_folder / f"frame_{frame_num:06d}_purity.png"
                 for frame_num in range(start + 1, end + 2)
             ]
-            purity_stitched_path = section_folder / "stitched_purity.png"
+            purity_stitched_path = section_folder / f"sec{section_idx}_stitched_purity.png"
             print(f"    Creating stitched purity image...")
             
             stitch_images_vertical(
@@ -309,9 +318,12 @@ def process_selected_data(config_file="selection_config.json",
             print(f"    Saved stitched purity image to: {purity_stitched_path}")
             
             # Also save per-section CSV
-            section_csv = section_folder / "measurements.csv"
+            section_csv = section_folder / f"sec{section_idx}_measurements.csv"
             section_df.to_csv(section_csv, index=False)
             print(f"    Saved section CSV to: {section_csv}")
+            
+            # Create per-section visualization
+            create_section_visualization(section_df, section_folder, strand_speed_mm_s, um_per_px, section_idx=section_idx-1, num_sections=num_sections, section_num=section_idx)
     
     # Combine all sections
     print(f"\n{'='*60}")
@@ -347,13 +359,15 @@ def process_selected_data(config_file="selection_config.json",
             
             # Create visualizations for this dataset
             print(f"\nCreating visualizations for {dataset_name}...")
+            strand_end = strand_metadata.get(dataset_name, {}).get('strand_end_frame', None)
             create_visualizations(
                 dataset_combined, 
                 dataset_metadata, 
                 analysis_dir,
                 full_df=full_df,
                 section_ranges=selections[dataset_name],
-                strand_speed_mm_s=strand_speed_mm_s
+                strand_speed_mm_s=strand_speed_mm_s,
+                strand_end_frame=strand_end
             )
     
     # Save strand settings at dataset level
@@ -388,13 +402,12 @@ def process_selected_data(config_file="selection_config.json",
                 f.write(f"                       - stitched.png (original images)\n")
                 f.write(f"                       - stitched_purity.png (purity maps)\n")
                 f.write(f"  analysis/          - Combined analysis and visualizations\n")
-                f.write(f"                       - diameter_analysis.png (frame index vs diameter)\n")
-                f.write(f"                       - diameter_analysis_by_position.png (strand position vs diameter)\n")
-                f.write(f"                       - purity_analysis_by_position.png (strand position vs purity)\n")
-                f.write(f"                       - strand_coverage.png (full strand with sampling gaps)\n")
-                f.write(f"                       - diameter_comparison.png (statistics by section)\n")
-                f.write(f"  selection_config.json - Your selected sections\n")
+                f.write(f"                       - strand_coverage.png (sampling overview bar)\n")
+                f.write(f"                       - diameter_vs_position.png (diameter along strand)\n")
+                f.write(f"                       - purity_vs_position.png (purity along strand)\n")
                 f.write(f"  processing_settings.json - Processing parameters\n")
+                f.write(f"\nNote: Selection configs are stored in inputs/<dataset>/selection_config.json\n")
+                f.write(f"      You can safely delete outputs/ without losing your viewer selections.\n")
     
     print(f"\n{'='*60}")
     print("Processing complete!")
@@ -403,10 +416,14 @@ def process_selected_data(config_file="selection_config.json",
     print(f"Total frames: {len(combined_df)}")
     print(f"Output directory: {output_path.absolute()}")
     print(f"\nStructure:")
-    print(f"  outputs/")
+    print(f"  inputs/                          <- Viewer selections (safe to keep)")
     for dataset_name in selections.keys():
         print(f"  └── {dataset_name}/")
-        print(f"      ├── selection_config.json")
+        print(f"      └── selection_config.json")
+    print(f"")
+    print(f"  outputs/                         <- Processing results (can be regenerated)")
+    for dataset_name in selections.keys():
+        print(f"  └── {dataset_name}/")
         print(f"      ├── processing_settings.json")
         print(f"      ├── README.txt")
         print(f"      ├── sections/")
@@ -418,15 +435,13 @@ def process_selected_data(config_file="selection_config.json",
         print(f"      └── analysis/")
         print(f"          ├── filtered_measurements.csv")
         print(f"          ├── section_metadata.csv")
-        print(f"          ├── diameter_analysis.png")
-        print(f"          ├── diameter_analysis_by_position.png")
-        print(f"          ├── purity_analysis_by_position.png")
         print(f"          ├── strand_coverage.png")
-        print(f"          └── diameter_comparison.png")
+        print(f"          ├── diameter_vs_position.png")
+        print(f"          └── purity_vs_position.png")
     print(f"{'='*60}")
 
 
-def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ranges=None, strand_speed_mm_s=None):
+def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ranges=None, strand_speed_mm_s=None, strand_end_frame=None):
     """
     Create analysis plots and visualizations.
     
@@ -437,249 +452,266 @@ def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ran
         full_df: Full dataset DataFrame (for strand coverage plot)
         section_ranges: List of (start, end) tuples for selected sections
         strand_speed_mm_s: Strand speed for position calculation
+        strand_end_frame: Frame index where strand ended (for xlim limit)
     """
     output_dir = Path(output_dir)
     
-    # Figure 1: Diameter over time for all sections
-    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+    if full_df is None or section_ranges is None or strand_speed_mm_s is None:
+        print("  Warning: Missing data for visualizations (full_df, section_ranges, or strand_speed)")
+        return
     
-    # Plot 1: All sections with boundaries
-    ax = axes[0]
-    sections = df['section_id'].unique()
-    colors = plt.cm.tab10(np.linspace(0, 1, len(sections)))
+    # Calculate full strand positions
+    times_ms = full_df['time_since_start_ms'].values
+    full_positions_mm = [strand_speed_mm_s * (t / 1000.0) for t in times_ms]
+    min_pos = min(full_positions_mm)
+    full_positions_mm = [p - min_pos for p in full_positions_mm]
+    total_strand_length = max(full_positions_mm)
     
-    for i, section_id in enumerate(sections):
-        section_data = df[df['section_id'] == section_id]
-        clean_data = section_data[~section_data['is_outlier']]
-        outlier_data = section_data[section_data['is_outlier']]
+    # Determine the actual end position (either strand end frame or total length)
+    if strand_end_frame is not None and strand_end_frame < len(full_positions_mm):
+        strand_end_position = full_positions_mm[strand_end_frame]
+    else:
+        strand_end_position = total_strand_length
+    
+    # Common color scheme for sections
+    section_colors = plt.cm.tab10(np.linspace(0, 1, len(section_ranges)))
+    
+    # Calculate gap info (used in multiple figures)
+    gap_info = []
+    
+    # Add initial gap from 0mm to first section
+    first_section_start = full_positions_mm[section_ranges[0][0]]
+    if first_section_start > 0:
+        gap_info.append({
+            'from_section': 0,
+            'to_section': 1,
+            'gap_mm': first_section_start,
+            'gap_start': 0,
+            'gap_end': first_section_start
+        })
+    
+    # Add gaps between sections
+    for i, (start, end) in enumerate(section_ranges):
+        if i < len(section_ranges) - 1:
+            next_start = section_ranges[i+1][0]
+            gap_start = full_positions_mm[end]
+            gap_end = full_positions_mm[next_start]
+            gap_length = gap_end - gap_start
+            gap_info.append({
+                'from_section': i+1,
+                'to_section': i+2,
+                'gap_mm': gap_length,
+                'gap_start': gap_start,
+                'gap_end': gap_end
+            })
+    
+    # Calculate coverage statistics
+    total_sampled = sum(full_positions_mm[e] - full_positions_mm[s] 
+                       for s, e in section_ranges)
+    coverage_pct = (total_sampled / total_strand_length) * 100 if total_strand_length > 0 else 0
+    total_samples = sum(e - s + 1 for s, e in section_ranges)
+    
+    # =========================================================================
+    # Figure 1: Strand Coverage Bar (horizontal bar with section numbers and gaps)
+    # =========================================================================
+    fig, ax = plt.subplots(figsize=(16, 3))
+    
+    # Draw full strand as gray background
+    ax.barh(0, total_strand_length, height=0.8, color='lightgray', 
+            edgecolor='gray', label='Unsampled', alpha=0.5)
+    
+    # Draw sampled sections as colored bars
+    for i, (start, end) in enumerate(section_ranges):
+        start_pos = full_positions_mm[start]
+        end_pos = full_positions_mm[end]
+        section_length = end_pos - start_pos
         
-        # Plot clean data
-        ax.plot(clean_data.index, clean_data['diameter_um'], 
-               'o-', color=colors[i], label=section_id, markersize=4, alpha=0.7)
+        ax.barh(0, section_length, left=start_pos, height=0.8, 
+               color=section_colors[i], edgecolor='black', linewidth=1,
+               label=f'Section {i+1}: {section_length:.1f} mm')
         
-        # Plot outliers
-        if len(outlier_data) > 0:
-            ax.plot(outlier_data.index, outlier_data['diameter_um'], 
-                   'x', color='red', markersize=6, alpha=0.5)
+        # Add section number label
+        ax.text(start_pos + section_length/2, 0, f'{i+1}', 
+               ha='center', va='center', fontsize=12, fontweight='bold', color='white')
     
-    ax.set_xlabel('Frame Index', fontsize=12)
-    ax.set_ylabel('Diameter (μm)', fontsize=12)
-    ax.set_title('Diameter Measurements Across All Sections', fontsize=14, fontweight='bold')
-    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-    ax.grid(True, alpha=0.3)
+    # Add gap annotations below the bar
+    for gap in gap_info:
+        gap_center = (gap['gap_start'] + gap['gap_end']) / 2
+        ax.annotate(f"{gap['gap_mm']:.1f}", 
+                   xy=(gap_center, -0.65), ha='center', fontsize=9, 
+                   color='darkred', fontweight='bold')
+        # Draw gap indicator arrow
+        ax.annotate('', xy=(gap['gap_end'], -0.5), xytext=(gap['gap_start'], -0.5),
+                   arrowprops=dict(arrowstyle='<->', color='darkred', lw=1.5))
     
-    # Plot 2: Distribution of diameters per section
-    ax = axes[1]
-    section_data_list = []
-    section_labels = []
-    
-    for section_id in sections:
-        section_data = df[df['section_id'] == section_id]
-        clean_data = section_data[~section_data['is_outlier']]['diameter_um']
-        section_data_list.append(clean_data)
-        section_labels.append(section_id)
-    
-    bp = ax.boxplot(section_data_list, labels=section_labels, patch_artist=True)
-    for patch, color in zip(bp['boxes'], colors):
-        patch.set_facecolor(color)
-        patch.set_alpha(0.6)
-    
-    ax.set_xlabel('Section', fontsize=12)
-    ax.set_ylabel('Diameter (μm)', fontsize=12)
-    ax.set_title('Diameter Distribution by Section', fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3, axis='y')
-    plt.xticks(rotation=45, ha='right')
+    ax.set_xlim(0, strand_end_position)
+    ax.set_ylim(-1.0, 0.8)
+    ax.set_xlabel('Strand Position (mm)', fontsize=12)
+    ax.set_title(f'Strand Sampling Coverage - Total: {total_strand_length:.1f} mm | '
+                f'Sampled: {total_sampled:.1f} mm ({coverage_pct:.1f}%) | '
+                f'Samples: {total_samples}', 
+                fontsize=12, fontweight='bold')
+    ax.set_yticks([])
+    ax.legend(loc='upper right', fontsize=8, ncol=len(section_ranges)+1)
+    ax.grid(True, alpha=0.3, axis='x')
     
     plt.tight_layout()
-    plt.savefig(output_dir / "diameter_analysis.png", dpi=300, bbox_inches='tight')
+    plt.savefig(output_dir / "strand_coverage.png", dpi=300, bbox_inches='tight')
     plt.close()
+    print(f"  Saved: strand_coverage.png")
     
-    # Figure 3: Diameter vs Strand Position (spatial reconstruction)
-    fig, ax = plt.subplots(figsize=(14, 6))
+    # =========================================================================
+    # Figure 2: Diameter vs Strand Position (with error bars)
+    # =========================================================================
+    fig, ax = plt.subplots(figsize=(16, 5))
     
-    for i, section_id in enumerate(sections):
-        section_data = df[df['section_id'] == section_id]
-        clean_data = section_data[~section_data['is_outlier']]
-        outlier_data = section_data[section_data['is_outlier']]
+    for i, (start, end) in enumerate(section_ranges):
+        # Get actual strand positions from full_positions_mm
+        section_positions = full_positions_mm[start:end+1]
         
-        # Plot clean data - using position_mm for x-axis
-        ax.plot(clean_data['position_mm'], clean_data['diameter_um'], 
-               'o-', color=colors[i], label=section_id, markersize=4, alpha=0.7)
+        # Get diameter data from full_df (not filtered df, to match positions)
+        section_diameters = full_df.iloc[start:end+1]['diameter_um'].values
         
-        # Plot outliers
-        if len(outlier_data) > 0:
-            ax.plot(outlier_data['position_mm'], outlier_data['diameter_um'], 
-                   'x', color='red', markersize=6, alpha=0.5)
+        # Filter out outliers based on IQR (inline)
+        q1, q3 = np.percentile(section_diameters, [25, 75])
+        iqr = q3 - q1
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+        mask = (section_diameters >= lower_bound) & (section_diameters <= upper_bound)
+        
+        clean_positions = np.array(section_positions)[mask]
+        clean_diameters = section_diameters[mask]
+        clean_diameter_stds = full_df.iloc[start:end+1]['diameter_std_um'].values[mask]
+        
+        if len(clean_diameters) > 0:
+            # Plot as scatter with connecting line
+            ax.plot(clean_positions, clean_diameters, 'o-', color=section_colors[i], 
+                   markersize=3, alpha=0.7, linewidth=1,
+                   label=f'Section {i+1}')
     
+    # Mark gaps with subtle shading
+    for gap in gap_info:
+        ax.axvspan(gap['gap_start'], gap['gap_end'], alpha=0.1, color='red')
+    
+    ax.set_xlim(0, strand_end_position)
     ax.set_xlabel('Strand Position (mm)', fontsize=12)
     ax.set_ylabel('Diameter (μm)', fontsize=12)
-    ax.set_title('Diameter vs Strand Position (Spatial Reconstruction)', fontsize=14, fontweight='bold')
-    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+    ax.legend(loc='upper right', fontsize=9)
     ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(output_dir / "diameter_analysis_by_position.png", dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # Figure 3b: Purity vs Strand Position
-    if 'purity_pct' in df.columns:
-        fig, ax = plt.subplots(figsize=(14, 6))
-        
-        for i, section_id in enumerate(sections):
-            section_data = df[df['section_id'] == section_id]
-            clean_data = section_data[~section_data['is_outlier']]
-            
-            # Plot purity - using position_mm for x-axis
-            ax.plot(clean_data['position_mm'], clean_data['purity_pct'], 
-                   'o-', color=colors[i], label=section_id, markersize=4, alpha=0.7)
-        
-        ax.set_xlabel('Strand Position (mm)', fontsize=12)
-        ax.set_ylabel('Measurement Purity (%)', fontsize=12)
-        ax.set_title('Measurement Purity vs Strand Position', fontsize=14, fontweight='bold')
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(output_dir / "purity_analysis_by_position.png", dpi=300, bbox_inches='tight')
-        plt.close()
-    
-    # Figure 4: Statistics summary
-    fig, ax = plt.subplots(figsize=(12, 6))
-    
-    x = np.arange(len(metadata_df))
-    width = 0.35
-    
-    ax.bar(x - width/2, metadata_df['diameter_mean'], width, 
-           yerr=metadata_df['diameter_std'], label='Mean ± Std', 
-           alpha=0.7, capsize=5)
-    
-    ax.set_xlabel('Section', fontsize=12)
-    ax.set_ylabel('Diameter (μm)', fontsize=12)
-    ax.set_title('Mean Diameter by Section', fontsize=14, fontweight='bold')
-    ax.set_xticks(x)
-    ax.set_xticklabels(metadata_df['section_id'], rotation=45, ha='right')
-    ax.legend()
-    ax.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()
-    plt.savefig(output_dir / "diameter_comparison.png", dpi=300, bbox_inches='tight')
+    plt.savefig(output_dir / "diameter_vs_position.png", dpi=300, bbox_inches='tight')
     plt.close()
+    print(f"  Saved: diameter_vs_position.png")
     
-    # Figure 5: Strand Coverage Map - shows full strand length with sampled regions
-    if full_df is not None and section_ranges is not None and strand_speed_mm_s is not None:
-        fig, axes = plt.subplots(2, 1, figsize=(16, 8), gridspec_kw={'height_ratios': [1, 2]})
-        
-        # Calculate full strand positions
-        times_ms = full_df['time_since_start_ms'].values
-        full_positions_mm = [strand_speed_mm_s * (t / 1000.0) for t in times_ms]
-        min_pos = min(full_positions_mm)
-        full_positions_mm = [p - min_pos for p in full_positions_mm]
-        total_strand_length = max(full_positions_mm)
-        
-        # Top plot: Strand coverage timeline
-        ax = axes[0]
-        
-        # Draw full strand as gray background
-        ax.barh(0, total_strand_length, height=0.8, color='lightgray', 
-                edgecolor='gray', label='Unsampled', alpha=0.5)
-        
-        # Draw sampled sections as colored bars
-        section_colors = plt.cm.tab10(np.linspace(0, 1, len(section_ranges)))
-        gap_info = []
+    # =========================================================================
+    # Figure 3: Purity vs Strand Position
+    # =========================================================================
+    if 'purity_pct' in full_df.columns:
+        fig, ax = plt.subplots(figsize=(16, 5))
         
         for i, (start, end) in enumerate(section_ranges):
-            # Get positions for this section
-            start_pos = full_positions_mm[start]
-            end_pos = full_positions_mm[end]
-            section_length = end_pos - start_pos
-            
-            ax.barh(0, section_length, left=start_pos, height=0.8, 
-                   color=section_colors[i], edgecolor='black', linewidth=1,
-                   label=f'Section {i+1}: {section_length:.1f} mm')
-            
-            # Add section label
-            ax.text(start_pos + section_length/2, 0, f'{i+1}', 
-                   ha='center', va='center', fontsize=10, fontweight='bold', color='white')
-            
-            # Calculate gap to next section
-            if i < len(section_ranges) - 1:
-                next_start = section_ranges[i+1][0]
-                gap_start = full_positions_mm[end]
-                gap_end = full_positions_mm[next_start]
-                gap_length = gap_end - gap_start
-                gap_info.append({
-                    'from_section': i+1,
-                    'to_section': i+2,
-                    'gap_mm': gap_length,
-                    'gap_start': gap_start,
-                    'gap_end': gap_end
-                })
-        
-        ax.set_xlim(0, total_strand_length)
-        ax.set_ylim(-0.6, 0.6)
-        ax.set_xlabel('Strand Position (mm)', fontsize=12)
-        ax.set_title(f'Strand Sampling Coverage - Total Length: {total_strand_length:.1f} mm', 
-                    fontsize=14, fontweight='bold')
-        ax.set_yticks([])
-        ax.legend(loc='upper right', fontsize=8, ncol=min(len(section_ranges)+1, 4))
-        ax.grid(True, alpha=0.3, axis='x')
-        
-        # Bottom plot: Detailed view with gaps and sample points
-        ax = axes[1]
-        
-        # Plot all potential sample positions as small gray ticks
-        ax.scatter(full_positions_mm, [0.5]*len(full_positions_mm), 
-                  s=2, c='lightgray', alpha=0.3, label='All frames')
-        
-        # Plot sampled positions colored by section
-        for i, (start, end) in enumerate(section_ranges):
+            # Get actual strand positions from full_positions_mm
             section_positions = full_positions_mm[start:end+1]
-            section_diameters = full_df.iloc[start:end+1]['diameter_um'].values
             
-            # Normalize diameter for y-axis
-            y_values = [1.0] * len(section_positions)  # Place at y=1
+            # Get purity data from full_df
+            section_purity = full_df.iloc[start:end+1]['purity_pct'].values
             
-            ax.scatter(section_positions, y_values, s=20, c=[section_colors[i]], 
-                      alpha=0.8, edgecolors='black', linewidths=0.5,
-                      label=f'Section {i+1} ({len(section_positions)} samples)')
+            if len(section_purity) > 0:
+                ax.plot(section_positions, section_purity, 'o-', color=section_colors[i], 
+                       markersize=3, alpha=0.7, linewidth=1,
+                       label=f'Section {i+1}')
         
-        # Mark gaps with red shading
+        # Mark gaps with subtle shading
         for gap in gap_info:
-            ax.axvspan(gap['gap_start'], gap['gap_end'], alpha=0.2, color='red')
-            gap_center = (gap['gap_start'] + gap['gap_end']) / 2
-            ax.annotate(f"Gap: {gap['gap_mm']:.1f} mm", 
-                       xy=(gap_center, 0.75), ha='center', fontsize=9, 
-                       color='darkred', fontweight='bold')
+            ax.axvspan(gap['gap_start'], gap['gap_end'], alpha=0.1, color='red')
         
-        # Calculate and show statistics
-        total_sampled = sum(full_positions_mm[e] - full_positions_mm[s] 
-                           for s, e in section_ranges)
-        coverage_pct = (total_sampled / total_strand_length) * 100 if total_strand_length > 0 else 0
-        total_samples = sum(e - s + 1 for s, e in section_ranges)
-        
-        stats_text = (f"Total strand: {total_strand_length:.1f} mm | "
-                     f"Sampled: {total_sampled:.1f} mm ({coverage_pct:.1f}%) | "
-                     f"Samples: {total_samples} | "
-                     f"Gaps: {len(gap_info)}")
-        
-        ax.set_xlim(0, total_strand_length)
-        ax.set_ylim(0, 1.5)
+        ax.set_xlim(0, strand_end_position)
+        ax.set_ylim(0, 105)  # Purity is 0-100%
         ax.set_xlabel('Strand Position (mm)', fontsize=12)
-        ax.set_ylabel('Sample Points', fontsize=12)
-        ax.set_title(stats_text, fontsize=11)
-        ax.set_yticks([0.5, 1.0])
-        ax.set_yticklabels(['All frames', 'Selected'])
-        ax.legend(loc='upper right', fontsize=8, ncol=min(len(section_ranges)+1, 4))
-        ax.grid(True, alpha=0.3, axis='x')
+        ax.set_ylabel('Purity (%)', fontsize=12)
+        ax.legend(loc='lower right', fontsize=9)
+        ax.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(output_dir / "strand_coverage.png", dpi=300, bbox_inches='tight')
+        plt.savefig(output_dir / "purity_vs_position.png", dpi=300, bbox_inches='tight')
         plt.close()
+        print(f"  Saved: purity_vs_position.png")
+
+
+def create_section_visualization(section_df, section_folder, strand_speed_mm_s, um_per_px, section_idx=0, num_sections=1, section_num=1):
+    """
+    Create per-section diameter and purity plots with error bars.
     
-    print(f"  Saved: diameter_analysis.png")
-    print(f"  Saved: diameter_analysis_by_position.png")
-    print(f"  Saved: purity_analysis_by_position.png")
-    print(f"  Saved: diameter_comparison.png")
-    if full_df is not None:
-        print(f"  Saved: strand_coverage.png")
+    Args:
+        section_df: DataFrame with section measurements
+        section_folder: Path to section folder (e.g., sections/section_1/)
+        strand_speed_mm_s: Strand speed for position calculation
+        um_per_px: Camera calibration
+        section_idx: Index of section (0-based) for color coding
+        num_sections: Total number of sections for consistent coloring
+        section_num: Section number (1-based) for filename prefix
+    """
+    section_folder = Path(section_folder)
+    section_folder.mkdir(parents=True, exist_ok=True)
+    
+    if len(section_df) == 0:
+        return
+    
+    # Calculate positions relative to section start
+    times_ms = section_df['time_since_start_ms'].values
+    positions_mm = [strand_speed_mm_s * (t / 1000.0) for t in times_ms]
+    min_pos = min(positions_mm)
+    positions_mm = [p - min_pos for p in positions_mm]
+    max_pos = max(positions_mm)
+    
+    # Get section color from tab10 colormap using same normalization as global visualization
+    section_color = plt.cm.tab10(section_idx / (num_sections - 1) if num_sections > 1 else 0)
+    
+    # =========================================================================
+    # Diameter plot for this section
+    # =========================================================================
+    fig, ax = plt.subplots(figsize=(12, 4))
+    
+    diameters = section_df['diameter_um'].values
+    diameter_stds = section_df['diameter_std_um'].values
+    
+    # Plot points with error bars
+    ax.plot(positions_mm, diameters, 'o-', color=section_color, 
+           markersize=2, alpha=0.5, linewidth=1, label='Diameter')
+    ax.errorbar(positions_mm, diameters, yerr=diameter_stds,
+               fmt='none', color=section_color, alpha=1, linewidth=1,
+               capsize=2, capthick=0.8)
+    
+    ax.set_xlim(0, max_pos)
+    ax.set_xlabel('Section Position (mm)', fontsize=11)
+    ax.set_ylabel('Diameter (μm)', fontsize=11)
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(section_folder / f"sec{section_num}_diameter_vs_position.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # =========================================================================
+    # Purity plot for this section
+    # =========================================================================
+    if 'purity_pct' in section_df.columns:
+        fig, ax = plt.subplots(figsize=(12, 4))
+        
+        purity = section_df['purity_pct'].values
+        
+        ax.plot(positions_mm, purity, 'o-', color='forestgreen', 
+               markersize=2, alpha=0.5, linewidth=1, label='Purity')
+        
+        ax.set_xlim(0, max_pos)
+        ax.set_ylim(0, 105)
+        ax.set_xlabel('Section Position (mm)', fontsize=11)
+        ax.set_ylabel('Purity (%)', fontsize=11)
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(section_folder / f"sec{section_num}_purity_vs_position.png", dpi=300, bbox_inches='tight')
+        plt.close()
 
 
 if __name__ == "__main__":

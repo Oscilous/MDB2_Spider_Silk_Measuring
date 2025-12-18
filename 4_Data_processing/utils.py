@@ -13,15 +13,46 @@ def load_selection_config(config_path="selection_config.json"):
     """
     Load the section selection configuration file.
     
+    Supports both old format (dict of dataset -> list of sections) and 
+    new format (per-dataset dict with 'sections' and optional 'strand_end_frame').
+    
     Returns:
-        dict: Dictionary mapping dataset names to lists of [start, end] frame pairs
+        dict: Dictionary mapping dataset names to dicts with 'sections' and optionally 'strand_end_frame'
     """
     config_file = Path(config_path)
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
     
     with open(config_file, 'r') as f:
-        return json.load(f)
+        data = json.load(f)
+    
+    # If it's already a new-format dict with 'sections' key at top level (per-dataset config)
+    if isinstance(data, dict) and 'sections' in data:
+        # This is a per-dataset config file, wrap it
+        return {'default': data}
+    
+    # If it's a list (old format from per-dataset), wrap it
+    if isinstance(data, list):
+        return {'default': {'sections': data}}
+    
+    # If it's already a dict mapping datasets to data, convert any list values to new format
+    if isinstance(data, dict):
+        result = {}
+        for dataset_name, dataset_data in data.items():
+            if isinstance(dataset_data, list):
+                # Old format: list of sections
+                result[dataset_name] = {'sections': dataset_data}
+            elif isinstance(dataset_data, dict):
+                # Already new format, ensure it has 'sections' key
+                if 'sections' not in dataset_data:
+                    result[dataset_name] = {'sections': dataset_data.get('data', [])}
+                else:
+                    result[dataset_name] = dataset_data
+            else:
+                result[dataset_name] = {'sections': []}
+        return result
+    
+    return {}
 
 
 def load_dataset(dataset_name, base_path=None):

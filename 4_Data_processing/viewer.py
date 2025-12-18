@@ -116,34 +116,50 @@ class SilkDataViewer:
     def load_selections(self):
         """Load previously saved section selections.
 
-        Loads per-dataset selection files from `outputs/<dataset>/selection_config.json`.
-        Backwards-compatible: if a top-level `selection_config.json` exists, it will be
-        loaded into the `default` key.
+        Loads per-dataset selection files from `inputs/<dataset>/selection_config.json`.
+        Format: {"sections": [[start, end], ...], "strand_end_frame": N or null}
+        Backwards-compatible: if old list format, wraps it in new dict format.
         """
         self.sections = {}
 
+        inputs_dir = Path(__file__).resolve().parent / "inputs"
+        if inputs_dir.exists():
+            for sel_file in inputs_dir.glob("*/selection_config.json"):
+                try:
+                    dataset_name = sel_file.parent.name
+                    with open(sel_file, 'r') as f:
+                        data = json.load(f)
+                    # Handle both old list format and new dict format
+                    if isinstance(data, dict):
+                        # New format: already has sections key
+                        if 'sections' in data:
+                            self.sections[dataset_name] = data
+                        else:
+                            # Old dict format without sections key, wrap it
+                            self.sections[dataset_name] = {'sections': data}
+                    elif isinstance(data, list):
+                        # Old format: just a list, wrap in new format
+                        self.sections[dataset_name] = {'sections': data}
+                    else:
+                        self.sections[dataset_name] = {'sections': []}
+                    print(f"Loaded selections for {dataset_name} from {sel_file}")
+                except Exception:
+                    print(f"Failed to load selections from {sel_file}")
+
+        # Backwards compatibility: also check outputs/ for old structure
         outputs_dir = Path(__file__).resolve().parent / "outputs"
         if outputs_dir.exists():
             for sel_file in outputs_dir.glob("*/selection_config.json"):
                 try:
                     dataset_name = sel_file.parent.name
-                    with open(sel_file, 'r') as f:
-                        data = json.load(f)
-                    # Expect data to be a list of [start,end] or a dict; normalize
-                    if isinstance(data, dict):
-                        # If file contains full mapping, take dataset key if present
-                        if dataset_name in data:
-                            self.sections[dataset_name] = data[dataset_name]
-                        else:
-                            # assume it's the list for this dataset
-                            self.sections[dataset_name] = data.get('sections', []) if isinstance(data.get('sections', []), list) else []
-                    elif isinstance(data, list):
-                        self.sections[dataset_name] = data
-                    else:
-                        self.sections[dataset_name] = []
-                    print(f"Loaded selections for {dataset_name} from {sel_file}")
+                    if dataset_name not in self.sections:  # Don't override inputs/
+                        with open(sel_file, 'r') as f:
+                            data = json.load(f)
+                        if isinstance(data, list):
+                            self.sections[dataset_name] = data
+                        print(f"Loaded legacy selections for {dataset_name} from {sel_file}")
                 except Exception:
-                    print(f"Failed to load selections from {sel_file}")
+                    pass
 
         # Backwards compatibility: top-level config
         if self.config_file.exists():
@@ -163,20 +179,20 @@ class SilkDataViewer:
     def save_selections(self):
         """Save section selections.
 
-        Saves per-dataset selection files to `outputs/<dataset>/selection_config.json`.
-        If a specific dataset is selected, save only that dataset's sections there.
+        Saves per-dataset selection files to `inputs/<dataset>/selection_config.json`.
+        Saves in format: {"sections": [[start, end], ...], "strand_end_frame": N or null}
         """
-        outputs_dir = Path(__file__).resolve().parent / "outputs"
-        outputs_dir.mkdir(parents=True, exist_ok=True)
+        inputs_dir = Path(__file__).resolve().parent / "inputs"
+        inputs_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save per-dataset files
-        for dataset_name, dataset_sections in self.sections.items():
-            dataset_dir = outputs_dir / dataset_name
+        # Save per-dataset files to inputs/ (not outputs/)
+        for dataset_name, dataset_data in self.sections.items():
+            dataset_dir = inputs_dir / dataset_name
             dataset_dir.mkdir(parents=True, exist_ok=True)
             sel_file = dataset_dir / "selection_config.json"
             try:
                 with open(sel_file, 'w') as f:
-                    json.dump(dataset_sections, f, indent=2)
+                    json.dump(dataset_data, f, indent=2)
                 print(f"Saved selections for {dataset_name} -> {sel_file}")
             except Exception as e:
                 print(f"Failed to save selections for {dataset_name}: {e}")
@@ -272,6 +288,9 @@ class SilkDataViewer:
         self.end_btn = ttk.Button(section_frame, text="🔴 End Section", 
                                   command=self.end_section, state='disabled', style='Red.TButton')
         self.end_btn.pack(side=tk.LEFT, padx=10)
+        
+        ttk.Button(section_frame, text="⏹️ Mark Strand End (Broken)", 
+                  command=self.mark_strand_end).pack(side=tk.LEFT, padx=10)
         
         ttk.Button(section_frame, text="💾 Save Selections", 
                   command=self.save_selections).pack(side=tk.LEFT, padx=10)
@@ -452,11 +471,15 @@ class SilkDataViewer:
                                "End frame must be after start frame")
             return
         
-        # Save section
+        # Save section - ensure dataset entry exists in new format
         if dataset_name not in self.sections:
-            self.sections[dataset_name] = []
+            self.sections[dataset_name] = {'sections': []}
         
-        self.sections[dataset_name].append([start_frame, end_frame])
+        # Ensure it's in the new dict format
+        if isinstance(self.sections[dataset_name], list):
+            self.sections[dataset_name] = {'sections': self.sections[dataset_name]}
+        
+        self.sections[dataset_name]['sections'].append([start_frame, end_frame])
         
         # Reset state
         self.section_in_progress = None
@@ -464,6 +487,31 @@ class SilkDataViewer:
         self.end_btn.config(state='disabled')
         self.status_label.config(text=f"Section saved: frames {start_frame + 1}-{end_frame + 1}", 
                                 foreground='blue')
+        
+        self.update_sections_display()
+        
+        # Auto-save
+        self.save_selections()
+    
+    def mark_strand_end(self):
+        """Mark that the strand has broken/ended and no more data should be recorded"""
+        if not self.current_dataset:
+            messagebox.showwarning("No Dataset", "Please select a dataset first")
+            return
+        
+        # Initialize dataset entry if needed
+        if self.current_dataset not in self.sections:
+            self.sections[self.current_dataset] = {'sections': []}
+        
+        # Ensure it's in the new format
+        if isinstance(self.sections[self.current_dataset], list):
+            self.sections[self.current_dataset] = {'sections': self.sections[self.current_dataset]}
+        
+        # Mark the strand end frame
+        self.sections[self.current_dataset]['strand_end_frame'] = self.current_frame
+        
+        self.status_label.config(text=f"Strand marked as ended at frame {self.current_frame + 1}", 
+                                foreground='orange')
         
         self.update_sections_display()
         
@@ -478,12 +526,24 @@ class SilkDataViewer:
             self.sections_text.insert(1.0, "No sections saved yet")
             return
         
-        for dataset_name, dataset_sections in self.sections.items():
+        for dataset_name, dataset_data in self.sections.items():
             self.sections_text.insert(tk.END, f"\n📁 {dataset_name}:\n")
-            for i, (start, end) in enumerate(dataset_sections, 1):
+            
+            # Handle both old list format and new dict format
+            if isinstance(dataset_data, list):
+                sections_list = dataset_data
+                strand_end = None
+            else:
+                sections_list = dataset_data.get('sections', [])
+                strand_end = dataset_data.get('strand_end_frame', None)
+            
+            for i, (start, end) in enumerate(sections_list, 1):
                 n_frames = end - start + 1
                 self.sections_text.insert(tk.END, 
                     f"  Section {i}: Frames {start + 1}-{end + 1} ({n_frames} frames)\n")
+            
+            if strand_end is not None:
+                self.sections_text.insert(tk.END, f"  ⏹️ Strand ended at frame {strand_end + 1}\n")
 
 
 def main():

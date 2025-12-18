@@ -20,10 +20,10 @@ Output Structure:
                        - stitched.png (original images)
                        - stitched_purity.png (purity maps)
   analysis/          - Combined analysis and visualizations
-                       - diameter_analysis.png (frame index vs diameter)
-                       - diameter_analysis_by_position.png (strand position vs diameter)
-                       - purity_analysis_by_position.png (strand position vs purity)
-                       - strand_coverage.png (full strand with sampling gaps)
-                       - diameter_comparison.png (statistics by section)
-  selection_config.json - Your selected sections
+                       - strand_coverage.png (sampling overview bar)
+                       - diameter_vs_position.png (diameter along strand)
+                       - purity_vs_position.png (purity along strand)
   processing_settings.json - Processing parameters
+
+Note: Selection configs are stored in inputs/<dataset>/selection_config.json
+      You can safely delete outputs/ without losing your viewer selections.
