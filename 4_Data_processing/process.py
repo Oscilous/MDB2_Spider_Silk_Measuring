@@ -299,23 +299,23 @@ def process_selected_data(config_file="selection_config.json",
             )
             print(f"    Saved stitched image to: {stitched_path}")
             
-            # Also stitch uncertainty images
-            uncertainty_paths = [
+            # Also stitch purity images
+            purity_paths = [
                 image_folder / f"frame_{frame_num:06d}_uncertainty.png"
                 for frame_num in range(start + 1, end + 2)
             ]
-            uncertainty_stitched_path = section_folder / f"sec{section_idx}_stitched_uncertainty.png"
-            print(f"    Creating stitched uncertainty image...")
+            purity_stitched_path = section_folder / f"sec{section_idx}_stitched_purity.png"
+            print(f"    Creating stitched purity image...")
             
             stitch_images_vertical(
-                uncertainty_paths, 
-                uncertainty_stitched_path, 
+                purity_paths, 
+                purity_stitched_path, 
                 section_df,
                 strand_speed_mm_s=strand_speed_mm_s,
                 um_per_px=um_per_px,
                 max_width=300
             )
-            print(f"    Saved stitched uncertainty image to: {uncertainty_stitched_path}")
+            print(f"    Saved stitched purity image to: {purity_stitched_path}")
             
             # Also save per-section CSV
             section_csv = section_folder / f"sec{section_idx}_measurements.csv"
@@ -401,11 +401,11 @@ def process_selected_data(config_file="selection_config.json",
                 f.write(f"Output Structure:\n")
                 f.write(f"  sections/          - Individual section folders with stitched images and measurements\n")
                 f.write(f"                       - stitched.png (original images)\n")
-                f.write(f"                       - stitched_uncertainty.png (uncertainty maps)\n")
+                f.write(f"                       - stitched_purity.png (purity maps)\n")
                 f.write(f"  analysis/          - Combined analysis and visualizations\n")
                 f.write(f"                       - strand_coverage.png (sampling overview bar)\n")
                 f.write(f"                       - diameter_vs_position.png (diameter along strand)\n")
-                f.write(f"                       - uncertainty_vs_position.png (uncertainty along strand)\n")
+                f.write(f"                       - purity_vs_position.png (purity along strand)\n")
                 f.write(f"                       - strand_movement_fov.png (strand position in camera FOV)\n")
                 f.write(f"  processing_settings.json - Processing parameters\n")
                 f.write(f"\nNote: Selection configs are stored in inputs/<dataset>/selection_config.json\n")
@@ -431,7 +431,7 @@ def process_selected_data(config_file="selection_config.json",
         print(f"      ├── sections/")
         print(f"      │   ├── section_1/")
         print(f"      │   │   ├── stitched.png")
-        print(f"      │   │   ├── stitched_uncertainty.png")
+        print(f"      │   │   ├── stitched_purity.png")
         print(f"      │   │   └── measurements.csv")
         print(f"      │   └── ...")
         print(f"      └── analysis/")
@@ -439,7 +439,7 @@ def process_selected_data(config_file="selection_config.json",
         print(f"          ├── section_metadata.csv")
         print(f"          ├── strand_coverage.png")
         print(f"          ├── diameter_vs_position.png")
-        print(f"          └── uncertainty_vs_position.png")
+        print(f"          └── purity_vs_position.png")
     print(f"{'='*60}")
 
 
@@ -608,7 +608,7 @@ def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ran
     print(f"  Saved: diameter_vs_position.png")
     
     # =========================================================================
-    # Figure 3: Uncertainty vs Strand Position
+    # Figure 3: Purity vs Strand Position
     # =========================================================================
     if 'purity_pct' in full_df.columns:
         fig, ax = plt.subplots(figsize=(16, 5))
@@ -617,11 +617,11 @@ def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ran
             # Get actual strand positions from full_positions_mm
             section_positions = full_positions_mm[start:end+1]
             
-            # Get uncertainty data from full_df
-            section_uncertainty = full_df.iloc[start:end+1]['purity_pct'].values
+            # Get purity data from full_df
+            section_purity = full_df.iloc[start:end+1]['purity_pct'].values
             
-            if len(section_uncertainty) > 0:
-                ax.plot(section_positions, section_uncertainty, 'o-', color=section_colors[i], 
+            if len(section_purity) > 0:
+                ax.plot(section_positions, section_purity, 'o-', color=section_colors[i], 
                        markersize=3, alpha=0.7, linewidth=1,
                        label=f'Section {i+1}')
         
@@ -630,16 +630,16 @@ def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ran
             ax.axvspan(gap['gap_start'], gap['gap_end'], alpha=0.1, color='red')
         
         ax.set_xlim(0, strand_end_position)
-        ax.set_ylim(0, 105)  # Uncertainty is 0-100%
+        ax.set_ylim(0, 105)  # Purity is 0-100%
         ax.set_xlabel('Strand Position (mm)', fontsize=12)
-        ax.set_ylabel('Uncertainty (%)', fontsize=12)
+        ax.set_ylabel('Purity (%)', fontsize=12)
         ax.legend(loc='lower right', fontsize=9)
         ax.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(output_dir / "uncertainty_vs_position.png", dpi=300, bbox_inches='tight')
+        plt.savefig(output_dir / "purity_vs_position.png", dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"  Saved: uncertainty_vs_position.png")
+        print(f"  Saved: purity_vs_position.png")
     
     # =========================================================================
     # Figure 4: Strand Movement in Camera Field of View
@@ -785,7 +785,7 @@ def create_strand_movement_visualization(df, full_df, section_ranges, output_dir
 
 def create_section_visualization(section_df, section_folder, strand_speed_mm_s, um_per_px, section_idx=0, num_sections=1, section_num=1):
     """
-    Create per-section diameter and uncertainty plots with error bars.
+    Create per-section diameter and purity plots with error bars.
     
     Args:
         section_df: DataFrame with section measurements
@@ -837,24 +837,24 @@ def create_section_visualization(section_df, section_folder, strand_speed_mm_s, 
     plt.close()
     
     # =========================================================================
-    # Uncertainty plot for this section
+    # Purity plot for this section
     # =========================================================================
     if 'purity_pct' in section_df.columns:
         fig, ax = plt.subplots(figsize=(12, 4))
         
-        uncertainty = section_df['purity_pct'].values
+        purity = section_df['purity_pct'].values
         
-        ax.plot(positions_mm, uncertainty, 'o-', color='forestgreen', 
-               markersize=2, alpha=0.5, linewidth=1, label='Uncertainty')
+        ax.plot(positions_mm, purity, 'o-', color='forestgreen', 
+               markersize=2, alpha=0.5, linewidth=1, label='Purity')
         
         ax.set_xlim(0, max_pos)
         ax.set_ylim(0, 105)
         ax.set_xlabel('Section Position (mm)', fontsize=11)
-        ax.set_ylabel('Uncertainty (%)', fontsize=11)
+        ax.set_ylabel('Purity (%)', fontsize=11)
         ax.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(section_folder / f"sec{section_num}_uncertainty_vs_position.png", dpi=300, bbox_inches='tight')
+        plt.savefig(section_folder / f"sec{section_num}_purity_vs_position.png", dpi=300, bbox_inches='tight')
         plt.close()
 
 
