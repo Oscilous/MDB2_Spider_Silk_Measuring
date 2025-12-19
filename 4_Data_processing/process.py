@@ -367,7 +367,8 @@ def process_selected_data(config_file="selection_config.json",
                 full_df=full_df,
                 section_ranges=selections[dataset_name],
                 strand_speed_mm_s=strand_speed_mm_s,
-                strand_end_frame=strand_end
+                strand_end_frame=strand_end,
+                um_per_px=um_per_px
             )
     
     # Save strand settings at dataset level
@@ -405,6 +406,7 @@ def process_selected_data(config_file="selection_config.json",
                 f.write(f"                       - strand_coverage.png (sampling overview bar)\n")
                 f.write(f"                       - diameter_vs_position.png (diameter along strand)\n")
                 f.write(f"                       - purity_vs_position.png (purity along strand)\n")
+                f.write(f"                       - strand_movement_fov.png (strand position in camera FOV)\n")
                 f.write(f"  processing_settings.json - Processing parameters\n")
                 f.write(f"\nNote: Selection configs are stored in inputs/<dataset>/selection_config.json\n")
                 f.write(f"      You can safely delete outputs/ without losing your viewer selections.\n")
@@ -441,7 +443,7 @@ def process_selected_data(config_file="selection_config.json",
     print(f"{'='*60}")
 
 
-def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ranges=None, strand_speed_mm_s=None, strand_end_frame=None):
+def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ranges=None, strand_speed_mm_s=None, strand_end_frame=None, um_per_px=1.2):
     """
     Create analysis plots and visualizations.
     
@@ -453,6 +455,7 @@ def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ran
         section_ranges: List of (start, end) tuples for selected sections
         strand_speed_mm_s: Strand speed for position calculation
         strand_end_frame: Frame index where strand ended (for xlim limit)
+        um_per_px: Camera calibration (µm per pixel)
     """
     output_dir = Path(output_dir)
     
@@ -637,6 +640,147 @@ def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ran
         plt.savefig(output_dir / "purity_vs_position.png", dpi=300, bbox_inches='tight')
         plt.close()
         print(f"  Saved: purity_vs_position.png")
+    
+    # =========================================================================
+    # Figure 4: Strand Movement in Camera Field of View
+    # =========================================================================
+    # Get image width from settings or use default for Raspberry Pi GS camera
+    image_width_px = 1440  # Default for RPi GS camera module
+    
+    create_strand_movement_visualization(
+        df=df,
+        full_df=full_df,
+        section_ranges=section_ranges,
+        output_dir=output_dir,
+        strand_speed_mm_s=strand_speed_mm_s,
+        um_per_px=um_per_px,
+        image_width_px=image_width_px,
+        strand_end_frame=strand_end_frame
+    )
+
+
+def create_strand_movement_visualization(df, full_df, section_ranges, output_dir, strand_speed_mm_s, um_per_px, 
+                                         image_width_px=1440, strand_end_frame=None):
+    """
+    Create a plot showing strand movement in the camera field of view.
+    
+    X-axis: Strand position (mm along the strand length)
+    Y-axis: Centroid X position in the frame (µm), showing horizontal movement
+    At each point, a vertical line is drawn representing the diameter.
+    
+    This visualization shows when the strand is close to leaving the frame.
+    
+    Args:
+        df: DataFrame with filtered/selected measurements
+        full_df: Full dataset DataFrame
+        section_ranges: List of (start, end) tuples for selected sections
+        output_dir: Directory to save the plot
+        strand_speed_mm_s: Strand speed for position calculation
+        um_per_px: Camera calibration (µm per pixel)
+        image_width_px: Width of camera frame in pixels (default: 1440 for RPi GS camera)
+        strand_end_frame: Frame index where strand ended (for xlim limit)
+    """
+    output_dir = Path(output_dir)
+    
+    # Calculate maximum field of view width in µm
+    max_fov_um = image_width_px * um_per_px
+    
+    # Calculate full strand positions
+    times_ms = full_df['time_since_start_ms'].values
+    full_positions_mm = [strand_speed_mm_s * (t / 1000.0) for t in times_ms]
+    min_pos = min(full_positions_mm)
+    full_positions_mm = [p - min_pos for p in full_positions_mm]
+    total_strand_length = max(full_positions_mm)
+    
+    # Determine the actual end position
+    if strand_end_frame is not None and strand_end_frame < len(full_positions_mm):
+        strand_end_position = full_positions_mm[strand_end_frame]
+    else:
+        strand_end_position = total_strand_length
+    
+    # Color scheme for sections
+    section_colors = plt.cm.tab10(np.linspace(0, 1, len(section_ranges)))
+    
+    # Calculate gap info for shading
+    gap_info = []
+    first_section_start = full_positions_mm[section_ranges[0][0]]
+    if first_section_start > 0:
+        gap_info.append({'gap_start': 0, 'gap_end': first_section_start})
+    
+    for i, (start, end) in enumerate(section_ranges):
+        if i < len(section_ranges) - 1:
+            next_start = section_ranges[i+1][0]
+            gap_start = full_positions_mm[end]
+            gap_end = full_positions_mm[next_start]
+            gap_info.append({'gap_start': gap_start, 'gap_end': gap_end})
+    
+    # =========================================================================
+    # Figure: Strand Movement in Camera Field of View
+    # =========================================================================
+    fig, ax = plt.subplots(figsize=(16, 6))
+    
+    # Draw frame boundaries as horizontal lines
+    ax.axhline(y=0, color='red', linestyle='--', linewidth=2.5, alpha=0.7, label='Frame boundary')
+    ax.axhline(y=max_fov_um, color='red', linestyle='--', linewidth=2.5, alpha=0.7)
+    
+    # Plot each section
+    for i, (start, end) in enumerate(section_ranges):
+        # Get positions along the strand
+        section_positions = full_positions_mm[start:end+1]
+        
+        # Get centroid X coordinates (in pixels) and diameters
+        section_data = full_df.iloc[start:end+1]
+        centroid_x_px = section_data['centroid_x'].values
+        diameters_um = section_data['diameter_um'].values
+        
+        # Convert centroid X from pixels to µm
+        centroid_x_um = centroid_x_px * um_per_px
+        
+        # Filter out NaN values (low confidence measurements)
+        valid_mask = ~np.isnan(centroid_x_px) & ~np.isnan(diameters_um) & (diameters_um > 0)
+        
+        if np.sum(valid_mask) == 0:
+            continue
+            
+        valid_positions = np.array(section_positions)[valid_mask]
+        valid_centroid_x = centroid_x_um[valid_mask]
+        valid_diameters = diameters_um[valid_mask]
+        
+        # Draw vertical lines representing diameter at each position
+        # The line extends from (centroid_x - diameter/2) to (centroid_x + diameter/2)
+        for pos, cx, diam in zip(valid_positions, valid_centroid_x, valid_diameters):
+            y_bottom = cx - diam / 2
+            y_top = cx + diam / 2
+            ax.plot([pos, pos], [y_bottom, y_top], color=section_colors[i], 
+                   linewidth=1.5, alpha=0.7)
+        
+        # Also plot the centroid path as a line
+        ax.plot(valid_positions, valid_centroid_x, '-', color=section_colors[i], 
+               linewidth=1, alpha=0.5, label=f'Section {i+1} centroid path')
+    
+    # Mark gaps with subtle shading
+    for gap in gap_info:
+        ax.axvspan(gap['gap_start'], gap['gap_end'], alpha=0.1, color='gray')
+    
+    # Set axis limits
+    ax.set_xlim(0, strand_end_position)
+    ax.set_ylim(0, max_fov_um)
+    
+    # Labels and formatting
+    ax.set_xlabel('Strand Position (mm)', fontsize=12)
+    ax.set_ylabel('Horizontal Position in Frame (µm)', fontsize=12)
+    
+    # Create legend with unique entries
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax.legend(by_label.values(), by_label.keys(), loc='lower left', fontsize=9)
+    
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / "strand_movement_fov.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: strand_movement_fov.png")
 
 
 def create_section_visualization(section_df, section_folder, strand_speed_mm_s, um_per_px, section_idx=0, num_sections=1, section_num=1):
