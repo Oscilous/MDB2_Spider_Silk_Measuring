@@ -31,9 +31,12 @@ class StrandSpeedDialog:
         self.result = None
         
         self.root = tk.Tk() if parent is None else tk.Toplevel(parent)
-        self.root.title("Strand Speed Settings")
-        self.root.geometry("400x300")
+        self.root.title("Data Processing and Visualization Program")
+        self.root.geometry("500x350")
         self.root.resizable(False, False)
+        
+        # Set a nicer background color
+        self.root.configure(bg='#f0f0f0')
         
         # Make dialog modal
         self.root.grab_set()
@@ -41,56 +44,75 @@ class StrandSpeedDialog:
         self.setup_ui()
         
     def setup_ui(self):
-        main_frame = ttk.Frame(self.root, padding="20")
+        main_frame = ttk.Frame(self.root, padding="25")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Title
-        ttk.Label(main_frame, text="Strand Speed Calculation", 
-                  font=('Arial', 12, 'bold')).pack(pady=(0, 15))
+        # Configure style
+        style = ttk.Style()
+        style.configure('Header.TLabel', font=('Arial', 13, 'bold'), background='#f0f0f0')
+        style.configure('Label.TLabel', font=('Arial', 10), background='#f0f0f0')
+        style.configure('TFrame', background='#f0f0f0')
+        style.configure('Green.TButton', font=('Arial', 10))
+        style.configure('Red.TButton', font=('Arial', 10))
         
-        # RPM
-        rpm_frame = ttk.Frame(main_frame)
-        rpm_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(rpm_frame, text="Motor RPM:", width=20).pack(side=tk.LEFT)
-        self.rpm_var = tk.StringVar(value="20")
-        ttk.Entry(rpm_frame, textvariable=self.rpm_var, width=15).pack(side=tk.LEFT)
+        # Parameters section with a separator
+        params_frame = ttk.LabelFrame(main_frame, text="Configuration Parameters", padding="15")
+        params_frame.pack(fill=tk.X, expand=False, pady=(0, 10))
         
-        # Gear ratio
-        gear_frame = ttk.Frame(main_frame)
-        gear_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(gear_frame, text="Gear ratio (1:X):", width=20).pack(side=tk.LEFT)
-        self.gear_var = tk.StringVar(value="8")
-        ttk.Entry(gear_frame, textvariable=self.gear_var, width=15).pack(side=tk.LEFT)
+        # Create input fields with better spacing
+        input_fields = [
+            ("Motor RPM:", self.create_rpm_var, "20"),
+            ("Gear Ratio (1:X):", self.create_gear_var, "8"),
+            ("Wheel Diameter (mm):", self.create_diameter_var, "50"),
+            ("µm per Pixel:", self.create_umpx_var, "1.2"),
+        ]
         
-        # Wheel diameter
-        wheel_frame = ttk.Frame(main_frame)
-        wheel_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(wheel_frame, text="Wheel diameter (mm):", width=20).pack(side=tk.LEFT)
-        self.diameter_var = tk.StringVar(value="50")
-        ttk.Entry(wheel_frame, textvariable=self.diameter_var, width=15).pack(side=tk.LEFT)
+        for label_text, var_creator, default_val in input_fields:
+            field_frame = ttk.Frame(params_frame)
+            field_frame.pack(fill=tk.X, pady=8)
+            
+            ttk.Label(field_frame, text=label_text, width=25, font=('Arial', 10)).pack(side=tk.LEFT, padx=(0, 10))
+            var = var_creator(default_val)
+            entry = ttk.Entry(field_frame, textvariable=var, width=20, font=('Arial', 10))
+            entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        # um per pixel (camera calibration)
-        umpx_frame = ttk.Frame(main_frame)
-        umpx_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(umpx_frame, text="µm per pixel:", width=20).pack(side=tk.LEFT)
-        self.umpx_var = tk.StringVar(value="1.2")
-        ttk.Entry(umpx_frame, textvariable=self.umpx_var, width=15).pack(side=tk.LEFT)
-        
-        # Calculated speed display
-        self.speed_label = ttk.Label(main_frame, text="", font=('Arial', 10))
-        self.speed_label.pack(pady=15)
-        
-        # Bind updates
+        # Bind updates to RPM, gear, and diameter for speed calculation
         self.rpm_var.trace('w', self.update_speed)
         self.gear_var.trace('w', self.update_speed)
         self.diameter_var.trace('w', self.update_speed)
-        self.update_speed()
         
-        # Buttons
+        # Button frame
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(pady=15)
-        ttk.Button(btn_frame, text="Process", command=self.on_ok).pack(side=tk.LEFT, padx=10)
-        ttk.Button(btn_frame, text="Cancel", command=self.on_cancel).pack(side=tk.LEFT, padx=10)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        # Create colored buttons using tk.Button instead of ttk.Button
+        cancel_btn = tk.Button(btn_frame, text="Cancel", command=self.on_cancel, 
+                              bg='#ff4444', fg='white', font=('Arial', 10), 
+                              padx=20, pady=8, relief=tk.RAISED, bd=1,
+                              activebackground='#cc0000', activeforeground='white')
+        cancel_btn.pack(side=tk.RIGHT, padx=5)
+        
+        process_btn = tk.Button(btn_frame, text="Process", command=self.on_ok,
+                               bg='#44aa44', fg='white', font=('Arial', 10),
+                               padx=20, pady=8, relief=tk.RAISED, bd=1,
+                               activebackground='#228B22', activeforeground='white')
+        process_btn.pack(side=tk.RIGHT, padx=5)
+    
+    def create_rpm_var(self, default):
+        self.rpm_var = tk.StringVar(value=default)
+        return self.rpm_var
+    
+    def create_gear_var(self, default):
+        self.gear_var = tk.StringVar(value=default)
+        return self.gear_var
+    
+    def create_diameter_var(self, default):
+        self.diameter_var = tk.StringVar(value=default)
+        return self.diameter_var
+    
+    def create_umpx_var(self, default):
+        self.umpx_var = tk.StringVar(value=default)
+        return self.umpx_var
         
     def calculate_speed(self):
         """Calculate strand speed in mm/s from parameters."""
@@ -116,8 +138,8 @@ class StrandSpeedDialog:
             return 0.0
     
     def update_speed(self, *args):
-        speed = self.calculate_speed()
-        self.speed_label.config(text=f"Calculated strand speed: {speed:.2f} mm/s")
+        """Update calculations (used for internal calculations)."""
+        pass
     
     def on_ok(self):
         try:
