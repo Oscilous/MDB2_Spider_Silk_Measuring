@@ -1,7 +1,7 @@
 {
-  "rpm": 20,
-  "gear_ratio": 8,
-  "diameter_mm": 50,
+  "rpm": 20.0,
+  "gear_ratio": 8.0,
+  "diameter_mm": 50.0,
   "um_per_px": 1.2,
-  "strand_speed_mm_s": 6.545
+  "strand_speed_mm_s": 6.544984694978736
 }
