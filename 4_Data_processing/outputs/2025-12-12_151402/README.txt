@@ -21,8 +21,8 @@ Output Structure:
                        - stitched_purity.png (purity maps)
   analysis/          - Combined analysis and visualizations
                        - strand_coverage.png (sampling overview bar)
-                       - diameter_vs_position.png (diameter along strand)
-                       - purity_vs_position.png (purity along strand)
+                       - diameter_vs_time.png (diameter over time)
+                       - purity_vs_time.png (purity over time)
                        - strand_movement_fov.png (strand position in camera FOV)
   processing_settings.json - Processing parameters
 

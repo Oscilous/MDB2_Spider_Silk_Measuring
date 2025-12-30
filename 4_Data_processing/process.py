@@ -426,8 +426,8 @@ def process_selected_data(config_file="selection_config.json",
                 f.write(f"                       - stitched_purity.png (purity maps)\n")
                 f.write(f"  analysis/          - Combined analysis and visualizations\n")
                 f.write(f"                       - strand_coverage.png (sampling overview bar)\n")
-                f.write(f"                       - diameter_vs_position.png (diameter along strand)\n")
-                f.write(f"                       - purity_vs_position.png (purity along strand)\n")
+                f.write(f"                       - diameter_vs_time.png (diameter over time)\n")
+                f.write(f"                       - purity_vs_time.png (purity over time)\n")
                 f.write(f"                       - strand_movement_fov.png (strand position in camera FOV)\n")
                 f.write(f"  processing_settings.json - Processing parameters\n")
                 f.write(f"\nNote: Selection configs are stored in inputs/<dataset>/selection_config.json\n")
@@ -485,97 +485,102 @@ def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ran
         print("  Warning: Missing data for visualizations (full_df, section_ranges, or strand_speed)")
         return
     
-    # Calculate full strand positions
+    # Calculate full strand positions (for coverage estimation only - assumes constant speed)
     times_ms = full_df['time_since_start_ms'].values
-    full_positions_mm = [strand_speed_mm_s * (t / 1000.0) for t in times_ms]
+    times_s = times_ms / 1000.0  # Convert to seconds
+    full_positions_mm = [strand_speed_mm_s * t for t in times_s]
     min_pos = min(full_positions_mm)
     full_positions_mm = [p - min_pos for p in full_positions_mm]
     total_strand_length = max(full_positions_mm)
     
-    # Determine the actual end position (either strand end frame or total length)
-    if strand_end_frame is not None and strand_end_frame < len(full_positions_mm):
+    # Determine the actual end time/position (either strand end frame or total)
+    if strand_end_frame is not None and strand_end_frame < len(times_s):
+        end_time = times_s[strand_end_frame]
         strand_end_position = full_positions_mm[strand_end_frame]
     else:
+        end_time = times_s[-1]
         strand_end_position = total_strand_length
     
     # Common color scheme for sections
     section_colors = plt.cm.tab10(np.linspace(0, 1, len(section_ranges)))
     
-    # Calculate gap info (used in multiple figures)
-    gap_info = []
+    # Calculate gap info in time (used in multiple figures)
+    gap_info_time = []
     
-    # Add initial gap from 0mm to first section
-    first_section_start = full_positions_mm[section_ranges[0][0]]
-    if first_section_start > 0:
-        gap_info.append({
+    # Add initial gap from 0s to first section
+    first_section_start_time = times_s[section_ranges[0][0]]
+    if first_section_start_time > 0:
+        gap_info_time.append({
             'from_section': 0,
             'to_section': 1,
-            'gap_mm': first_section_start,
             'gap_start': 0,
-            'gap_end': first_section_start
+            'gap_end': first_section_start_time
         })
     
     # Add gaps between sections
     for i, (start, end) in enumerate(section_ranges):
         if i < len(section_ranges) - 1:
             next_start = section_ranges[i+1][0]
-            gap_start = full_positions_mm[end]
-            gap_end = full_positions_mm[next_start]
-            gap_length = gap_end - gap_start
-            gap_info.append({
+            gap_start = times_s[end]
+            gap_end = times_s[next_start]
+            gap_info_time.append({
                 'from_section': i+1,
                 'to_section': i+2,
-                'gap_mm': gap_length,
                 'gap_start': gap_start,
                 'gap_end': gap_end
             })
     
-    # Calculate coverage statistics
+    # Calculate coverage statistics (estimated based on assumed constant speed)
     total_sampled = sum(full_positions_mm[e] - full_positions_mm[s] 
                        for s, e in section_ranges)
     coverage_pct = (total_sampled / total_strand_length) * 100 if total_strand_length > 0 else 0
     total_samples = sum(e - s + 1 for s, e in section_ranges)
     
     # =========================================================================
-    # Figure 1: Strand Coverage Bar (horizontal bar with section numbers and gaps)
+    # Figure 1: Strand Coverage Bar (assumes constant spooling speed)
     # =========================================================================
     fig, ax = plt.subplots(figsize=(16, 3))
     
+    # Use time on x-axis
+    total_time = end_time
+    
     # Draw full strand as gray background
-    ax.barh(0, total_strand_length, height=0.8, color='lightgray', 
+    ax.barh(0, total_time, height=0.8, color='lightgray', 
             edgecolor='gray', label='Unsampled', alpha=0.5)
     
     # Draw sampled sections as colored bars
     for i, (start, end) in enumerate(section_ranges):
-        start_pos = full_positions_mm[start]
-        end_pos = full_positions_mm[end]
-        section_length = end_pos - start_pos
+        start_time = times_s[start]
+        end_time_sec = times_s[end]
+        section_duration = end_time_sec - start_time
         
-        ax.barh(0, section_length, left=start_pos, height=0.8, 
+        ax.barh(0, section_duration, left=start_time, height=0.8, 
                color=section_colors[i], edgecolor='black', linewidth=1,
-               label=f'Section {i+1}: {section_length:.1f} mm')
+               label=f'Section {i+1}: {section_duration:.1f} s')
         
         # Add section number label
-        ax.text(start_pos + section_length/2, 0, f'{i+1}', 
+        ax.text(start_time + section_duration/2, 0, f'{i+1}', 
                ha='center', va='center', fontsize=12, fontweight='bold', color='white')
     
     # Add gap annotations below the bar
-    for gap in gap_info:
+    for gap in gap_info_time:
+        gap_duration = gap['gap_end'] - gap['gap_start']
         gap_center = (gap['gap_start'] + gap['gap_end']) / 2
-        ax.annotate(f"{gap['gap_mm']:.1f}", 
+        ax.annotate(f"{gap_duration:.1f}", 
                    xy=(gap_center, -0.65), ha='center', fontsize=9, 
                    color='darkred', fontweight='bold')
         # Draw gap indicator arrow
         ax.annotate('', xy=(gap['gap_end'], -0.5), xytext=(gap['gap_start'], -0.5),
                    arrowprops=dict(arrowstyle='<->', color='darkred', lw=1.5))
     
-    ax.set_xlim(0, strand_end_position)
+    ax.set_xlim(0, total_time)
     ax.set_ylim(-1.0, 0.8)
-    ax.set_xlabel('Strand Position (mm)', fontsize=12)
-    ax.set_title(f'Strand Sampling Coverage - Total: {total_strand_length:.1f} mm | '
-                f'Sampled: {total_sampled:.1f} mm ({coverage_pct:.1f}%) | '
-                f'Samples: {total_samples}', 
-                fontsize=12, fontweight='bold')
+    ax.set_xlabel('Time (seconds)', fontsize=12)
+    ax.set_title(f'Assuming {strand_speed_mm_s:.2f} mm/s spooling speed: '
+                f'~{total_strand_length:.1f} mm strand, '
+                f'~{total_sampled:.1f} mm sampled ({coverage_pct:.1f}%), '
+                f'{total_samples} samples', 
+                fontsize=11, fontweight='bold')
     ax.set_yticks([])
     ax.legend(loc='upper right', fontsize=8, ncol=len(section_ranges)+1)
     ax.grid(True, alpha=0.3, axis='x')
@@ -586,13 +591,13 @@ def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ran
     print(f"  Saved: strand_coverage.png")
     
     # =========================================================================
-    # Figure 2: Diameter vs Strand Position (with error bars)
+    # Figure 2: Diameter vs Time
     # =========================================================================
     fig, ax = plt.subplots(figsize=(16, 5))
     
     for i, (start, end) in enumerate(section_ranges):
-        # Get actual strand positions from full_positions_mm
-        section_positions = full_positions_mm[start:end+1]
+        # Get time for this section
+        section_times = times_s[start:end+1]
         
         # Get diameter data from full_df (not filtered df, to match positions)
         section_diameters = full_df.iloc[start:end+1]['diameter_um'].values
@@ -604,64 +609,64 @@ def create_visualizations(df, metadata_df, output_dir, full_df=None, section_ran
         upper_bound = q3 + 1.5 * iqr
         mask = (section_diameters >= lower_bound) & (section_diameters <= upper_bound)
         
-        clean_positions = np.array(section_positions)[mask]
+        clean_times = np.array(section_times)[mask]
         clean_diameters = section_diameters[mask]
         clean_diameter_stds = full_df.iloc[start:end+1]['diameter_std_um'].values[mask]
         
         if len(clean_diameters) > 0:
             # Plot as scatter with connecting line
-            ax.plot(clean_positions, clean_diameters, 'o-', color=section_colors[i], 
+            ax.plot(clean_times, clean_diameters, 'o-', color=section_colors[i], 
                    markersize=3, alpha=0.7, linewidth=1,
                    label=f'Section {i+1}')
     
     # Mark gaps with subtle shading
-    for gap in gap_info:
+    for gap in gap_info_time:
         ax.axvspan(gap['gap_start'], gap['gap_end'], alpha=0.1, color='red')
     
-    ax.set_xlim(0, strand_end_position)
-    ax.set_xlabel('Strand Position (mm)', fontsize=12)
+    ax.set_xlim(0, end_time)
+    ax.set_xlabel('Time (seconds)', fontsize=12)
     ax.set_ylabel('Diameter (μm)', fontsize=12)
     ax.legend(loc='upper right', fontsize=9)
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(output_dir / "diameter_vs_position.png", dpi=300, bbox_inches='tight')
+    plt.savefig(output_dir / "diameter_vs_time.png", dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"  Saved: diameter_vs_position.png")
+    print(f"  Saved: diameter_vs_time.png")
     
     # =========================================================================
-    # Figure 3: Purity vs Strand Position
+    # Figure 3: Purity vs Time
     # =========================================================================
     if 'purity_pct' in full_df.columns:
         fig, ax = plt.subplots(figsize=(16, 5))
         
         for i, (start, end) in enumerate(section_ranges):
-            # Get actual strand positions from full_positions_mm
-            section_positions = full_positions_mm[start:end+1]
+            # Get time for this section
+            section_times = times_s[start:end+1]
             
             # Get purity data from full_df
             section_purity = full_df.iloc[start:end+1]['purity_pct'].values
             
             if len(section_purity) > 0:
-                ax.plot(section_positions, section_purity, 'o-', color=section_colors[i], 
+                ax.plot(section_times, section_purity, 'o-', color=section_colors[i], 
                        markersize=3, alpha=0.7, linewidth=1,
                        label=f'Section {i+1}')
         
         # Mark gaps with subtle shading
-        for gap in gap_info:
+        for gap in gap_info_time:
             ax.axvspan(gap['gap_start'], gap['gap_end'], alpha=0.1, color='red')
         
-        ax.set_xlim(0, strand_end_position)
+        ax.set_xlim(0, end_time)
         ax.set_ylim(0, 105)  # Purity is 0-100%
-        ax.set_xlabel('Strand Position (mm)', fontsize=12)
+        ax.set_xlabel('Time (seconds)', fontsize=12)
         ax.set_ylabel('Purity (%)', fontsize=12)
         ax.legend(loc='lower right', fontsize=9)
         ax.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(output_dir / "purity_vs_position.png", dpi=300, bbox_inches='tight')
+        plt.savefig(output_dir / "purity_vs_time.png", dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"  Saved: purity_vs_position.png")
+        print(f"  Saved: purity_vs_time.png")
     
     # =========================================================================
     # Figure 4: Strand Movement in Camera Field of View
@@ -686,11 +691,11 @@ def create_strand_movement_visualization(df, full_df, section_ranges, output_dir
     """
     Create a plot showing strand movement in the camera field of view.
     
-    X-axis: Strand position (mm along the strand length)
+    X-axis: Time (seconds)
     Y-axis: Centroid X position in the frame (µm), showing horizontal movement
     At each point, a vertical line is drawn representing the diameter.
     
-    This visualization shows when the strand is close to leaving the frame.
+    This visualization shows when the strand is close to leaving the frame and how fast it's moving.
     
     Args:
         df: DataFrame with filtered/selected measurements
@@ -707,37 +712,34 @@ def create_strand_movement_visualization(df, full_df, section_ranges, output_dir
     # Calculate maximum field of view width in µm
     max_fov_um = image_width_px * um_per_px
     
-    # Calculate full strand positions
+    # Get time data (in seconds)
     times_ms = full_df['time_since_start_ms'].values
-    full_positions_mm = [strand_speed_mm_s * (t / 1000.0) for t in times_ms]
-    min_pos = min(full_positions_mm)
-    full_positions_mm = [p - min_pos for p in full_positions_mm]
-    total_strand_length = max(full_positions_mm)
+    times_s = times_ms / 1000.0
     
-    # Determine the actual end position
-    if strand_end_frame is not None and strand_end_frame < len(full_positions_mm):
-        strand_end_position = full_positions_mm[strand_end_frame]
+    # Determine the end time
+    if strand_end_frame is not None and strand_end_frame < len(times_s):
+        end_time = times_s[strand_end_frame]
     else:
-        strand_end_position = total_strand_length
+        end_time = times_s[-1]
     
     # Color scheme for sections
     section_colors = plt.cm.tab10(np.linspace(0, 1, len(section_ranges)))
     
-    # Calculate gap info for shading
+    # Calculate gap info for shading (in time)
     gap_info = []
-    first_section_start = full_positions_mm[section_ranges[0][0]]
-    if first_section_start > 0:
-        gap_info.append({'gap_start': 0, 'gap_end': first_section_start})
+    first_section_start_time = times_s[section_ranges[0][0]]
+    if first_section_start_time > 0:
+        gap_info.append({'gap_start': 0, 'gap_end': first_section_start_time})
     
     for i, (start, end) in enumerate(section_ranges):
         if i < len(section_ranges) - 1:
             next_start = section_ranges[i+1][0]
-            gap_start = full_positions_mm[end]
-            gap_end = full_positions_mm[next_start]
+            gap_start = times_s[end]
+            gap_end = times_s[next_start]
             gap_info.append({'gap_start': gap_start, 'gap_end': gap_end})
     
     # =========================================================================
-    # Figure: Strand Movement in Camera Field of View
+    # Figure: Strand Movement in Camera Field of View (vs Time)
     # =========================================================================
     fig, ax = plt.subplots(figsize=(16, 6))
     
@@ -747,8 +749,8 @@ def create_strand_movement_visualization(df, full_df, section_ranges, output_dir
     
     # Plot each section
     for i, (start, end) in enumerate(section_ranges):
-        # Get positions along the strand
-        section_positions = full_positions_mm[start:end+1]
+        # Get time for this section
+        section_times = times_s[start:end+1]
         
         # Get centroid X coordinates (in pixels) and diameters
         section_data = full_df.iloc[start:end+1]
@@ -764,20 +766,20 @@ def create_strand_movement_visualization(df, full_df, section_ranges, output_dir
         if np.sum(valid_mask) == 0:
             continue
             
-        valid_positions = np.array(section_positions)[valid_mask]
+        valid_times = np.array(section_times)[valid_mask]
         valid_centroid_x = centroid_x_um[valid_mask]
         valid_diameters = diameters_um[valid_mask]
         
         # Draw vertical lines representing diameter at each position
         # The line extends from (centroid_x - diameter/2) to (centroid_x + diameter/2)
-        for pos, cx, diam in zip(valid_positions, valid_centroid_x, valid_diameters):
+        for t, cx, diam in zip(valid_times, valid_centroid_x, valid_diameters):
             y_bottom = cx - diam / 2
             y_top = cx + diam / 2
-            ax.plot([pos, pos], [y_bottom, y_top], color=section_colors[i], 
+            ax.plot([t, t], [y_bottom, y_top], color=section_colors[i], 
                    linewidth=1.5, alpha=0.7)
         
         # Also plot the centroid path as a line
-        ax.plot(valid_positions, valid_centroid_x, '-', color=section_colors[i], 
+        ax.plot(valid_times, valid_centroid_x, '-', color=section_colors[i], 
                linewidth=1, alpha=0.5, label=f'Section {i+1} centroid path')
     
     # Mark gaps with subtle shading
@@ -785,11 +787,11 @@ def create_strand_movement_visualization(df, full_df, section_ranges, output_dir
         ax.axvspan(gap['gap_start'], gap['gap_end'], alpha=0.1, color='gray')
     
     # Set axis limits
-    ax.set_xlim(0, strand_end_position)
+    ax.set_xlim(0, end_time)
     ax.set_ylim(0, max_fov_um)
     
     # Labels and formatting
-    ax.set_xlabel('Strand Position (mm)', fontsize=12)
+    ax.set_xlabel('Time (seconds)', fontsize=12)
     ax.set_ylabel('Horizontal Position in Frame (µm)', fontsize=12)
     
     # Create legend with unique entries
@@ -812,7 +814,7 @@ def create_section_visualization(section_df, section_folder, strand_speed_mm_s, 
     Args:
         section_df: DataFrame with section measurements
         section_folder: Path to section folder (e.g., sections/section_1/)
-        strand_speed_mm_s: Strand speed for position calculation
+        strand_speed_mm_s: Strand speed for position calculation (not used)
         um_per_px: Camera calibration
         section_idx: Index of section (0-based) for color coding
         num_sections: Total number of sections for consistent coloring
@@ -824,12 +826,12 @@ def create_section_visualization(section_df, section_folder, strand_speed_mm_s, 
     if len(section_df) == 0:
         return
     
-    # Calculate positions relative to section start
+    # Calculate time relative to section start
     times_ms = section_df['time_since_start_ms'].values
-    positions_mm = [strand_speed_mm_s * (t / 1000.0) for t in times_ms]
-    min_pos = min(positions_mm)
-    positions_mm = [p - min_pos for p in positions_mm]
-    max_pos = max(positions_mm)
+    times_s = times_ms / 1000.0
+    min_time = min(times_s)
+    times_s = times_s - min_time
+    max_time = max(times_s)
     
     # Get section color from tab10 colormap using same normalization as global visualization
     section_color = plt.cm.tab10(section_idx / (num_sections - 1) if num_sections > 1 else 0)
@@ -843,19 +845,19 @@ def create_section_visualization(section_df, section_folder, strand_speed_mm_s, 
     diameter_stds = section_df['diameter_std_um'].values
     
     # Plot points with error bars
-    ax.plot(positions_mm, diameters, 'o-', color=section_color, 
+    ax.plot(times_s, diameters, 'o-', color=section_color, 
            markersize=2, alpha=0.5, linewidth=1, label='Diameter')
-    ax.errorbar(positions_mm, diameters, yerr=diameter_stds,
+    ax.errorbar(times_s, diameters, yerr=diameter_stds,
                fmt='none', color=section_color, alpha=1, linewidth=1,
                capsize=2, capthick=0.8)
     
-    ax.set_xlim(0, max_pos)
-    ax.set_xlabel('Section Position (mm)', fontsize=11)
+    ax.set_xlim(0, max_time)
+    ax.set_xlabel('Time (seconds)', fontsize=11)
     ax.set_ylabel('Diameter (μm)', fontsize=11)
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(section_folder / f"sec{section_num}_diameter_vs_position.png", dpi=300, bbox_inches='tight')
+    plt.savefig(section_folder / f"sec{section_num}_diameter_vs_time.png", dpi=300, bbox_inches='tight')
     plt.close()
     
     # =========================================================================
@@ -866,17 +868,17 @@ def create_section_visualization(section_df, section_folder, strand_speed_mm_s, 
         
         purity = section_df['purity_pct'].values
         
-        ax.plot(positions_mm, purity, 'o-', color='forestgreen', 
+        ax.plot(times_s, purity, 'o-', color='forestgreen', 
                markersize=2, alpha=0.5, linewidth=1, label='Purity')
         
-        ax.set_xlim(0, max_pos)
+        ax.set_xlim(0, max_time)
         ax.set_ylim(0, 105)
-        ax.set_xlabel('Section Position (mm)', fontsize=11)
+        ax.set_xlabel('Time (seconds)', fontsize=11)
         ax.set_ylabel('Purity (%)', fontsize=11)
         ax.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(section_folder / f"sec{section_num}_purity_vs_position.png", dpi=300, bbox_inches='tight')
+        plt.savefig(section_folder / f"sec{section_num}_purity_vs_time.png", dpi=300, bbox_inches='tight')
         plt.close()
 
 
