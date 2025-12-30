@@ -81,9 +81,9 @@ Where measurement CSVs and captured images are stored. Each recording session cr
 
 1. Install dependencies:
 ```bash
-pip install PyQt5 opencv-python-headless numpy psutil scikit-image scipy picamera2 pillow
+pip install -r requirements.txt
 ```
-> Note: `picamera2` requires Raspberry Pi OS and is installed via apt: `sudo apt install python3-picamera2`
+> Note: `picamera2` requires Raspberry Pi OS and may need: `sudo apt install python3-picamera2`
 
 2. Clone this repo and navigate to `3_Diameter_Measuring/`
 
@@ -98,7 +98,7 @@ python main.py
 
 1. Install dependencies:
 ```bash
-pip install pandas numpy matplotlib pillow scipy scikit-image
+pip install -r requirements.txt
 ```
 
 2. Copy the `data/` folder from the Pi to your PC
